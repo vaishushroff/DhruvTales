@@ -6,3 +6,17 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Google Cloud / Firebase service account & credential JSON key files
+*service-account*.json
+*serviceAccount*.json
+*firebase-adminsdk*.json
+*-credentials.json
+*credentials*.json
+*-key.json
+google-key*.json
+gdrive-*.json
+key.json
+secrets/*.json
+.vercel
+

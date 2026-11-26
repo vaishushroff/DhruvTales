@@ -11,6 +11,7 @@ import type {
   DailyUnlockEntry,
   Episode,
   EpisodeChoicePoint,
+  EpisodeUnlockRecord,
   InteractiveChoiceOption,
   PlaybackFormat,
   Story,
@@ -62,7 +63,8 @@ interface AudioPlayerContextValue {
     episode: Episode,
     customStartSec?: number,
     newlyUnlocked?: DailyUnlockEntry,
-    forcedFormat?: PlaybackFormat
+    forcedFormat?: PlaybackFormat,
+    newlyUnlockedCoin?: EpisodeUnlockRecord
   ) => Promise<void>;
   playLocalFileForEpisode: (file: File, story: Story, episode: Episode) => Promise<void>;
   switchFormat: (nextFormat: PlaybackFormat) => Promise<void>;
@@ -94,6 +96,8 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
     episodes,
     history,
     dailyUnlocks,
+    episodeUnlocks,
+    economySettings,
     userChoices,
     saveProgress,
     recordUserChoice,
@@ -105,8 +109,12 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [videoElVersion, setVideoElVersion] = useState(0);
 
   const lastSavedSecRef = useRef<number>(-10);
+  const lastPersistedSnapshotRef = useRef<{ key: string; at: number } | null>(null);
   const triggeredChoicesRef = useRef<Set<string>>(new Set());
   const pendingHandoffRef = useRef<PendingMediaHandoff | null>(null);
+  const mediaExpiresAtRef = useRef<number | null>(null);
+  const refreshedExpiredUrlRef = useRef<string | null>(null);
+  const isRefreshingSignedUrlRef = useRef<boolean>(false);
 
   const [currentStory, setCurrentStory] = useState<Story | null>(null);
   const [currentEpisode, setCurrentEpisode] = useState<Episode | null>(null);
@@ -186,10 +194,26 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
       const story = currentStoryRef.current;
       const episode = currentEpisodeRef.current;
       if (!story || !episode) return;
-      const safeDur = Math.max(1, Math.round(durSec || episode.durationSec));
-      const safePos = Math.max(0, Math.min(safeDur, Math.round(posSec)));
+      const rawDur = Number.isFinite(durSec) && durSec > 0 ? durSec : episode.durationSec;
+      const safeDur = Math.max(1, Math.min(86400, Math.round(rawDur)));
+      const rawPos = Number.isFinite(posSec) ? posSec : 0;
+      const safePos = Math.max(0, Math.min(safeDur, Math.round(rawPos)));
+
+      // Deduplicate rapid identical saves (e.g., togglePlayPause + native onPause event)
+      const snapKey = `${episode.id}:${safePos}:${safeDur}:${completed ? 1 : 0}`;
+      const now = Date.now();
+      if (
+        lastPersistedSnapshotRef.current &&
+        lastPersistedSnapshotRef.current.key === snapKey &&
+        now - lastPersistedSnapshotRef.current.at < 1200
+      ) {
+        return;
+      }
+      lastPersistedSnapshotRef.current = { key: snapKey, at: now };
+
       void saveProgress({
         storyId: story.id,
+        storyOwnerUid: story.creatorOwnerUid,
         episodeId: episode.id,
         episodeNumber: episode.episodeNumber,
         positionSec: safePos,
@@ -207,6 +231,7 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
       pendingHandoffRef.current = null;
       return;
     }
+    if (el.readyState < 1) return;
 
     pendingHandoffRef.current = null;
 
@@ -225,6 +250,7 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
 
     setPlaybackRateState(handoff.playbackRate);
+    playbackRateRef.current = handoff.playbackRate;
     setCurrentTime(targetPos);
     if (Number.isFinite(el.duration) && el.duration > 0) {
       setDuration(el.duration);
@@ -236,6 +262,7 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
       void el
         .play()
         .then(() => {
+          el.playbackRate = handoff.playbackRate;
           setIsPlaying(true);
         })
         .catch(() => {
@@ -286,7 +313,8 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
       targetFormat: PlaybackFormat,
       startSec: number,
       rate: number,
-      shouldAutoPlay: boolean
+      shouldAutoPlay: boolean,
+      initialDurationSec?: number
     ) => {
       const formats = getEpisodeFormats(episode);
       const mediaRef =
@@ -305,6 +333,15 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
       const provider = getMediaProvider(mediaRef.provider);
       const resolution = await provider.getPlaybackUrl(mediaRef, profile, episode);
       setMediaResolution(resolution);
+      mediaExpiresAtRef.current = resolution.expiresAt ?? null;
+      refreshedExpiredUrlRef.current = null;
+
+      const effectiveInitialDuration =
+        typeof initialDurationSec === 'number' &&
+        Number.isFinite(initialDurationSec) &&
+        initialDurationSec > 0
+          ? initialDurationSec
+          : episode.durationSec;
 
       const handoff: PendingMediaHandoff = {
         targetFormat,
@@ -319,15 +356,17 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
       setActiveFormat(targetFormat);
       activeFormatRef.current = targetFormat;
       setCurrentTime(startSec);
-      setDuration(episode.durationSec);
+      setDuration(effectiveInitialDuration);
+      durationRef.current = effectiveInitialDuration;
       lastSavedSecRef.current = startSec;
 
       if (targetFormat === 'video') {
         setActiveVideoUrl(resolution.url);
         const video = videoElRef.current;
         if (video) {
-          if (video.src !== resolution.url) {
-            video.src = resolution.url;
+          const currentAttrSrc = video.getAttribute('src');
+          if (currentAttrSrc !== resolution.url) {
+            video.setAttribute('src', resolution.url);
             video.load();
           } else if (video.readyState >= 1) {
             applyPendingHandoff(video, 'video');
@@ -348,16 +387,78 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         }
       }
 
-      void saveProgress({
-        storyId: story.id,
-        episodeId: episode.id,
-        episodeNumber: episode.episodeNumber,
-        positionSec: startSec,
-        durationSec: episode.durationSec,
-        completed: false,
-      });
+      persistProgress(startSec, effectiveInitialDuration, false);
     },
-    [profile, saveProgress, applyPendingHandoff]
+    [profile, persistProgress, applyPendingHandoff]
+  );
+
+  const isSignedUrlExpiringSoon = useCallback((bufferMs = 20_000): boolean => {
+    const exp = mediaExpiresAtRef.current;
+    if (!exp) return false;
+    return Date.now() + bufferMs >= exp;
+  }, []);
+
+  const refreshSignedStreamIfNeeded = useCallback(
+    async (options: { force?: boolean; targetPos?: number; shouldPlay?: boolean } = {}): Promise<boolean> => {
+      const story = currentStoryRef.current;
+      const episode = currentEpisodeRef.current;
+      if (!story || !episode) return false;
+
+      const format = activeFormatRef.current;
+      const formats = getEpisodeFormats(episode);
+      const activeRef =
+        format === 'video' && formats.videoRef
+          ? formats.videoRef
+          : formats.audioRef ?? episode.mediaRef;
+
+      if (activeRef.provider !== 'drive') return false;
+      if (!options.force && !isSignedUrlExpiringSoon()) return false;
+      if (isRefreshingSignedUrlRef.current) return true;
+
+      const el = getActiveMediaElement();
+      const currentUrl = el?.getAttribute('src') ?? el?.src ?? '';
+      if (options.force && currentUrl && refreshedExpiredUrlRef.current === currentUrl) {
+        return false;
+      }
+
+      isRefreshingSignedUrlRef.current = true;
+      if (currentUrl) {
+        refreshedExpiredUrlRef.current = currentUrl;
+      }
+
+      const pos =
+        typeof options.targetPos === 'number'
+          ? options.targetPos
+          : el && Number.isFinite(el.currentTime)
+            ? el.currentTime
+            : currentTime;
+      const shouldPlay =
+        typeof options.shouldPlay === 'boolean' ? options.shouldPlay : isPlayingRef.current;
+
+      try {
+        await loadMediaForEpisode(
+          story,
+          episode,
+          format,
+          pos,
+          playbackRateRef.current,
+          shouldPlay,
+          durationRef.current || episode.durationSec
+        );
+        return true;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Unable to refresh media authorization.';
+        if (format === 'video') {
+          setVideoError(msg);
+        } else {
+          setErrorMessage(msg);
+        }
+        return false;
+      } finally {
+        isRefreshingSignedUrlRef.current = false;
+      }
+    },
+    [currentTime, getActiveMediaElement, isSignedUrlExpiringSoon, loadMediaForEpisode]
   );
 
   const playEpisode = useCallback(
@@ -366,16 +467,27 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
       episode: Episode,
       customStartSec?: number,
       newlyUnlocked?: DailyUnlockEntry,
-      forcedFormat?: PlaybackFormat
+      forcedFormat?: PlaybackFormat,
+      newlyUnlockedCoin?: EpisodeUnlockRecord
     ) => {
       setErrorMessage(null);
       setVideoError(null);
       setActiveChoicePoint(null);
 
-      const effectiveUnlocks = newlyUnlocked ? [...dailyUnlocks, newlyUnlocked] : dailyUnlocks;
-      const access = canAccessEpisode(profile, episode, { dailyUnlocks: effectiveUnlocks });
+      const effectiveDailyUnlocks = newlyUnlocked ? [...dailyUnlocks, newlyUnlocked] : dailyUnlocks;
+      const effectiveCoinUnlocks = newlyUnlockedCoin
+        ? [...episodeUnlocks, newlyUnlockedCoin]
+        : episodeUnlocks;
+      const access = canAccessEpisode(profile, episode, {
+        story,
+        episodeUnlocks: effectiveCoinUnlocks,
+        dailyUnlocks: effectiveDailyUnlocks,
+        economySettings,
+      });
       if (!access.allowed) {
-        setErrorMessage('This episode is locked. Unlock it via Daily Free Unlock or Premium.');
+        setErrorMessage(
+          `This episode requires ${access.effectivePriceCoins} coins to unlock permanently.`
+        );
         return;
       }
 
@@ -404,15 +516,33 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
           : prior && !prior.completed && prior.positionSec > 2
             ? prior.positionSec
             : 0;
+      const initialDurationSec =
+        prior && prior.durationSec > 0 ? prior.durationSec : episode.durationSec;
 
       try {
-        await loadMediaForEpisode(story, episode, resolvedFormat, resumeAt, playbackRateRef.current, true);
+        await loadMediaForEpisode(
+          story,
+          episode,
+          resolvedFormat,
+          resumeAt,
+          playbackRateRef.current,
+          true,
+          initialDurationSec
+        );
       } catch (err) {
         setIsLoadingMedia(false);
         setErrorMessage(err instanceof Error ? err.message : 'Unable to resolve media stream.');
       }
     },
-    [dailyUnlocks, profile, preferredFormat, history, loadMediaForEpisode]
+    [
+      dailyUnlocks,
+      episodeUnlocks,
+      economySettings,
+      profile,
+      preferredFormat,
+      history,
+      loadMediaForEpisode,
+    ]
   );
 
   const switchFormat = useCallback(
@@ -494,7 +624,7 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         const isVideo = uploadedRef.type === 'video';
         const patchedEpisode: Episode = {
           ...episode,
-          accessTier: 'free',
+          priceCoins: 0,
           mediaRef: isVideo ? episode.mediaRef : uploadedRef,
           audioRef: isVideo ? episode.audioRef ?? episode.mediaRef : uploadedRef,
           videoMediaRef: isVideo ? uploadedRef : episode.videoMediaRef,
@@ -519,6 +649,14 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
       setIsPlaying(false);
       persistProgress(el.currentTime, el.duration || durationRef.current, false);
     } else {
+      if (isSignedUrlExpiringSoon()) {
+        await refreshSignedStreamIfNeeded({
+          force: false,
+          targetPos: Number.isFinite(el.currentTime) ? el.currentTime : currentTime,
+          shouldPlay: true,
+        });
+        return;
+      }
       try {
         await el.play();
         setIsPlaying(true);
@@ -526,7 +664,14 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         setErrorMessage(err instanceof Error ? err.message : 'Playback blocked by browser.');
       }
     }
-  }, [activeChoicePoint, getActiveMediaElement, persistProgress]);
+  }, [
+    activeChoicePoint,
+    currentTime,
+    getActiveMediaElement,
+    isSignedUrlExpiringSoon,
+    persistProgress,
+    refreshSignedStreamIfNeeded,
+  ]);
 
   const seekTo = useCallback(
     (seconds: number) => {
@@ -534,6 +679,19 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
       const maxDur =
         el && Number.isFinite(el.duration) && el.duration > 0 ? el.duration : durationRef.current;
       const clamped = Math.max(0, Math.min(maxDur || 0, seconds));
+
+      if (isSignedUrlExpiringSoon(5_000)) {
+        setCurrentTime(clamped);
+        lastSavedSecRef.current = clamped;
+        persistProgress(clamped, maxDur, false);
+        void refreshSignedStreamIfNeeded({
+          force: false,
+          targetPos: clamped,
+          shouldPlay: isPlayingRef.current,
+        });
+        return;
+      }
+
       if (el) {
         try {
           el.currentTime = clamped;
@@ -553,7 +711,13 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         triggerChoiceOverlayForEpisode(ep, el);
       }
     },
-    [getActiveMediaElement, persistProgress, triggerChoiceOverlayForEpisode]
+    [
+      getActiveMediaElement,
+      isSignedUrlExpiringSoon,
+      persistProgress,
+      refreshSignedStreamIfNeeded,
+      triggerChoiceOverlayForEpisode,
+    ]
   );
 
   const skipBy = useCallback(
@@ -627,7 +791,8 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         (e) => e.storyId === story.id && e.id === option.nextEpisodeId
       );
       if (nextEp) {
-        await playEpisode(story, nextEp, 0);
+        const keepFormat = activeFormatRef.current === 'video' ? 'video' : undefined;
+        await playEpisode(story, nextEp, 0, undefined, keepFormat);
       }
     },
     [episodes, persistProgress, playEpisode, recordUserChoice]
@@ -681,7 +846,8 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
       if (existingChoice) {
         const chosenEp = storyEpisodes.find((e) => e.id === existingChoice.nextEpisodeId);
         if (chosenEp) {
-          await playEpisode(story, chosenEp, 0);
+          const keepFormat = activeFormatRef.current === 'video' ? 'video' : undefined;
+          await playEpisode(story, chosenEp, 0, undefined, keepFormat);
           return;
         }
       }
@@ -692,7 +858,8 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
     if (currentIdx >= 0 && currentIdx < storyEpisodes.length - 1) {
       const nextEp = storyEpisodes[currentIdx + 1];
       if (nextEp) {
-        await playEpisode(story, nextEp);
+        const keepFormat = activeFormatRef.current === 'video' ? 'video' : undefined;
+        await playEpisode(story, nextEp, undefined, undefined, keepFormat);
       }
     }
   }, [
@@ -708,7 +875,8 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
     if (!currentStory || !hasPrevious) return;
     const prevEp = storyEpisodes[currentIdx - 1];
     if (prevEp) {
-      await playEpisode(currentStory, prevEp);
+      const keepFormat = activeFormatRef.current === 'video' ? 'video' : undefined;
+      await playEpisode(currentStory, prevEp, undefined, undefined, keepFormat);
     }
   }, [currentStory, hasPrevious, storyEpisodes, currentIdx, playEpisode]);
 
@@ -810,14 +978,43 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
       const onError = () => {
         if (!isCurrentFormat()) return;
+
+        // If a short-lived Drive stream token expired mid-playback, transparently re-authorize once
+        const ep = currentEpisodeRef.current;
+        const formats = ep ? getEpisodeFormats(ep) : null;
+        const activeRef =
+          ep && formats
+            ? format === 'video' && formats.videoRef
+              ? formats.videoRef
+              : formats.audioRef ?? ep.mediaRef
+            : null;
+
+        if (activeRef?.provider === 'drive' && !isRefreshingSignedUrlRef.current) {
+          const currentSrc = el.getAttribute('src') ?? el.src ?? '';
+          if (currentSrc && refreshedExpiredUrlRef.current !== currentSrc) {
+            void refreshSignedStreamIfNeeded({
+              force: true,
+              targetPos: Number.isFinite(el.currentTime) ? el.currentTime : 0,
+              shouldPlay: isPlayingRef.current,
+            });
+            return;
+          }
+        }
+
         setIsLoadingMedia(false);
         setIsPlaying(false);
         if (format === 'video') {
           setVideoError(
-            'Unable to load the video stream right now. You can retry or switch seamlessly to Audio mode.'
+            activeRef?.provider === 'drive'
+              ? 'Unable to stream this Google Drive video right now (file missing, not shared, or Drive quota exceeded). Retry or switch to Audio.'
+              : 'Unable to load the video stream right now. You can retry or switch seamlessly to Audio mode.'
           );
         } else {
-          setErrorMessage('Audio stream encountered a playback error.');
+          setErrorMessage(
+            activeRef?.provider === 'drive'
+              ? 'Unable to stream this Google Drive audio right now (file missing, not shared, or Drive quota exceeded).'
+              : 'Audio stream encountered a playback error.'
+          );
         }
       };
 
@@ -841,7 +1038,13 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         el.removeEventListener('error', onError);
       };
     },
-    [applyPendingHandoff, persistProgress, playNextEpisode, triggerChoiceOverlayForEpisode]
+    [
+      applyPendingHandoff,
+      persistProgress,
+      playNextEpisode,
+      refreshSignedStreamIfNeeded,
+      triggerChoiceOverlayForEpisode,
+    ]
   );
 
   useEffect(() => {

@@ -1,4 +1,5 @@
 import type { Episode, MediaRef, UserProfile } from '../../types';
+import { sanitizeSafeUrl } from '../../utils/validation';
 import type {
   MediaPlaybackResolution,
   MediaProvider,
@@ -149,20 +150,31 @@ export class DemoMediaProvider implements MediaProvider {
   readonly providerType = 'demo' as const;
   readonly displayName = 'DemoMediaProvider (Local / Sample Streams)';
   readonly isImplemented = true;
+  /** Demo media playback is NOT protected by DRM or backend signed URLs. */
+  readonly isProductionProtected = false;
 
   async checkAccess(
     mediaRef: MediaRef,
-    _user: UserProfile | null,
+    user: UserProfile | null,
     _episode?: Episode
   ): Promise<boolean> {
-    return mediaRef.provider === 'demo' && mediaRef.id.length > 0;
+    // Reject disabled accounts even in demo mode; full paid DRM requires a backend provider.
+    if (user?.isDisabled) {
+      return false;
+    }
+    return mediaRef.provider === 'demo' && mediaRef.id.trim().length > 0;
   }
 
   async getPlaybackUrl(
     mediaRef: MediaRef,
-    _user: UserProfile | null,
-    _episode?: Episode
+    user: UserProfile | null,
+    episode?: Episode
   ): Promise<MediaPlaybackResolution> {
+    const allowed = await this.checkAccess(mediaRef, user, episode);
+    if (!allowed) {
+      throw new Error('Playback authorization denied by MediaProvider.');
+    }
+
     // 1. Check browser-local uploaded files first
     const localFile = localFileRegistry.get(mediaRef.id);
     if (localFile) {
@@ -171,18 +183,24 @@ export class DemoMediaProvider implements MediaProvider {
         mimeType: localFile.mimeType,
         provider: 'demo',
         isSimulatedMedia: true,
-        label: `Local file: ${localFile.name}`,
+        isProductionProtected: false,
+        label: `Local file: ${localFile.name} (Demo — unprotected local preview)`,
       };
     }
 
-    // 2. Support explicit https demo sample if encoded in mediaRef.id
+    // 2. Support explicit https demo sample if encoded in mediaRef.id (strictly validated)
     if (mediaRef.id.startsWith('https://')) {
+      const safeExternalUrl = sanitizeSafeUrl(mediaRef.id);
+      if (!safeExternalUrl) {
+        throw new Error('Blocked unsafe external media URL.');
+      }
       return {
-        url: mediaRef.id,
+        url: safeExternalUrl,
         mimeType: mediaRef.type === 'video' ? 'video/mp4' : 'audio/mpeg',
         provider: 'demo',
         isSimulatedMedia: true,
-        label: 'Public sample media stream',
+        isProductionProtected: false,
+        label: 'Public sample media stream (Demo — not production DRM)',
       };
     }
 
@@ -199,7 +217,8 @@ export class DemoMediaProvider implements MediaProvider {
         mimeType,
         provider: 'demo',
         isSimulatedMedia: true,
-        label: `${clip.label} (${ext.toUpperCase()})`,
+        isProductionProtected: false,
+        label: `${clip.label} (${ext.toUpperCase()} · Demo only, not DRM-protected)`,
       };
     }
 
@@ -210,7 +229,8 @@ export class DemoMediaProvider implements MediaProvider {
       mimeType: 'audio/wav',
       provider: 'demo',
       isSimulatedMedia: true,
-      label: `Demo Audio Bed (${mediaRef.id})`,
+      isProductionProtected: false,
+      label: `Demo Audio Bed (${mediaRef.id} · Not production DRM)`,
     };
   }
 

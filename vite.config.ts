@@ -22,6 +22,8 @@ export default defineConfig(() => {
           theme_color: '#0B0B0E',
           background_color: '#0B0B0E',
           display: 'standalone',
+          orientation: 'portrait-primary',
+          categories: ['entertainment', 'books'],
           start_url: '/',
           scope: '/',
           icons: [
@@ -48,6 +50,8 @@ export default defineConfig(() => {
         workbox: {
           maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+          navigateFallback: '/index.html',
+          navigateFallbackDenylist: [/^\/api/],
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,

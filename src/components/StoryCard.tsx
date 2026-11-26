@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { Link } from 'react-router-dom';
 import { Play } from 'lucide-react';
 import type { Category, ListeningHistoryEntry, Story } from '../types';
@@ -13,12 +13,13 @@ interface StoryCardProps {
   compact?: boolean;
 }
 
-export const StoryCard: React.FC<StoryCardProps> = ({
-  story,
-  category,
-  progress,
-  compact = false,
-}) => {
+export const StoryCard: React.FC<StoryCardProps> = memo(
+  ({
+    story,
+    category,
+    progress,
+    compact = false,
+  }) => {
   const { lang, t } = useLanguage();
   const title = lang === 'hi' ? story.titleHi : story.title;
   const genreLabel = category
@@ -70,7 +71,7 @@ export const StoryCard: React.FC<StoryCardProps> = ({
           {title}
         </h3>
         <p className="text-xs text-[#A39E93] truncate">{story.creatorName}</p>
-        <div className="flex items-center gap-1.5 text-[11px] text-[#8A857B] tabular-nums truncate">
+        <div className="flex items-center gap-1.5 text-[11px] text-[#9B968B] tabular-nums truncate">
           <span>{genreLabel}</span>
           <span aria-hidden="true">·</span>
           <span>{langLabel}</span>
@@ -84,11 +85,13 @@ export const StoryCard: React.FC<StoryCardProps> = ({
             {t('common.episode')} {progress.episodeNumber} · {pct}%
           </p>
         ) : (
-          <p className="text-[11px] text-[#78736A] tabular-nums">
+          <p className="text-[11px] text-[#9B968B] tabular-nums">
             ★ {story.rating.toFixed(1)} · {formatPlayCount(story.totalPlays)} {t('common.plays')}
           </p>
         )}
       </div>
     </Link>
   );
-};
+});
+
+StoryCard.displayName = 'StoryCard';

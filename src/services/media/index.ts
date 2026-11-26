@@ -20,4 +20,10 @@ export function listMediaProviders(): MediaProvider[] {
   return Object.values(providerRegistry);
 }
 
+export {
+  DriveMediaError,
+  DriveMediaProvider,
+  importEpisodesFromDriveFolder,
+  type DriveFolderImportResult,
+} from './DriveProvider';
 export type { MediaProvider, MediaPlaybackResolution, MediaUploadMetadata } from './MediaProvider';

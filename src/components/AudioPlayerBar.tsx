@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
   ChevronDown,
   ChevronUp,
@@ -54,6 +54,17 @@ export const AudioPlayerBar: React.FC = () => {
     closePlayer,
   } = useAudioPlayer();
 
+  useEffect(() => {
+    if (!isExpanded || activeChoicePoint) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsExpanded(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isExpanded, activeChoicePoint, setIsExpanded]);
+
   if (!currentStory || !currentEpisode) return null;
 
   const storyTitle = lang === 'hi' ? currentStory.titleHi : currentStory.title;
@@ -72,7 +83,7 @@ export const AudioPlayerBar: React.FC = () => {
         <aside
           aria-label={t('player.nowPlaying')}
           data-testid="mini-player"
-          className="fixed bottom-16 md:bottom-0 left-0 right-0 z-40 bg-[#141418]/95 backdrop-blur-md border-t border-white/10"
+          className="fixed mini-player-mobile-offset left-0 right-0 z-40 bg-[#141418]/95 backdrop-blur-md border-t border-white/10"
         >
           {/* Thin top progress hairline */}
           <div className="h-[2px] w-full bg-white/10">
@@ -119,7 +130,7 @@ export const AudioPlayerBar: React.FC = () => {
                   data-testid="mini-format-toggle"
                   onClick={() => void switchFormat(activeFormat === 'audio' ? 'video' : 'audio')}
                   aria-label={t('player.switchFormat')}
-                  className="hidden sm:inline-flex min-h-[36px] px-2.5 rounded-lg bg-[#1C1C22] border border-[#E5A93C]/35 text-xs font-medium text-[#F3C669] hover:border-[#E5A93C] items-center gap-1.5 transition-colors whitespace-nowrap"
+                  className="hidden sm:inline-flex min-h-[44px] px-3 rounded-lg bg-[#1C1C22] border border-[#E5A93C]/35 text-xs font-medium text-[#F3C669] hover:border-[#E5A93C] items-center gap-1.5 transition-colors whitespace-nowrap"
                 >
                   {activeFormat === 'audio' ? (
                     <>
@@ -139,7 +150,7 @@ export const AudioPlayerBar: React.FC = () => {
                 type="button"
                 onClick={() => skipBy(-15)}
                 aria-label={t('player.skipBack')}
-                className="hidden sm:flex min-w-[40px] min-h-[40px] items-center justify-center rounded-lg text-[#A39E93] hover:text-[#F5F3EE] hover:bg-white/5 transition-colors"
+                className="hidden sm:flex min-w-[44px] min-h-[44px] items-center justify-center rounded-lg text-[#A39E93] hover:text-[#F5F3EE] hover:bg-white/5 transition-colors"
               >
                 <RotateCcw className="w-4 h-4" />
               </button>
@@ -163,7 +174,7 @@ export const AudioPlayerBar: React.FC = () => {
                 type="button"
                 onClick={() => skipBy(15)}
                 aria-label={t('player.skipForward')}
-                className="hidden sm:flex min-w-[40px] min-h-[40px] items-center justify-center rounded-lg text-[#A39E93] hover:text-[#F5F3EE] hover:bg-white/5 transition-colors"
+                className="hidden sm:flex min-w-[44px] min-h-[44px] items-center justify-center rounded-lg text-[#A39E93] hover:text-[#F5F3EE] hover:bg-white/5 transition-colors"
               >
                 <RotateCw className="w-4 h-4" />
               </button>
@@ -172,7 +183,7 @@ export const AudioPlayerBar: React.FC = () => {
                 type="button"
                 onClick={cyclePlaybackRate}
                 aria-label={`${t('player.speed')} ${playbackRate}x`}
-                className="hidden md:flex min-h-[36px] px-2.5 rounded-lg border border-white/10 text-xs font-mono-tabular text-[#F5F3EE] hover:border-[#E5A93C]/50 items-center justify-center transition-colors whitespace-nowrap"
+                className="hidden md:flex min-w-[44px] min-h-[44px] px-2.5 rounded-lg border border-white/10 text-xs font-mono-tabular text-[#F5F3EE] hover:border-[#E5A93C]/50 items-center justify-center transition-colors whitespace-nowrap"
               >
                 {playbackRate}x
               </button>
@@ -181,7 +192,7 @@ export const AudioPlayerBar: React.FC = () => {
                 type="button"
                 onClick={() => setIsExpanded(true)}
                 aria-label={t('player.expand')}
-                className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg text-[#A39E93] hover:text-[#F5F3EE] transition-colors"
+                className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg text-[#A39E93] hover:text-[#F5F3EE] transition-colors"
               >
                 <ChevronUp className="w-5 h-5" />
               </button>
@@ -190,7 +201,7 @@ export const AudioPlayerBar: React.FC = () => {
                 type="button"
                 onClick={closePlayer}
                 aria-label={t('player.closePlayer')}
-                className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg text-[#A39E93] hover:text-[#F5F3EE] transition-colors"
+                className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg text-[#A39E93] hover:text-[#F5F3EE] transition-colors"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -213,13 +224,19 @@ export const AudioPlayerBar: React.FC = () => {
           data-testid="full-player-dialog"
           className={
             isExpanded
-              ? 'fixed inset-0 z-50 bg-[#0B0B0E]/98 backdrop-blur-xl overflow-y-auto'
-              : 'fixed -left-[9999px] top-0 w-[320px] h-[180px] overflow-hidden opacity-0 pointer-events-none'
+              ? 'fixed inset-0 z-50 h-[100dvh] bg-[#0B0B0E]/98 backdrop-blur-xl overflow-y-auto overflow-x-hidden safe-top safe-bottom'
+              : 'fixed -left-[9999px] top-0 w-[180px] h-[320px] overflow-hidden opacity-0 pointer-events-none'
           }
         >
-          <div className="max-w-3xl mx-auto min-h-screen px-4 sm:px-6 py-5 sm:py-8 flex flex-col justify-between gap-6">
+          <div
+            className={`mx-auto min-h-full px-3 sm:px-6 flex flex-col justify-between ${
+              activeFormat === 'video'
+                ? 'max-w-4xl py-2.5 sm:py-4 gap-3'
+                : 'max-w-3xl py-5 sm:py-8 gap-6'
+            }`}
+          >
             {/* Top Bar with Audio ⇄ Video Switcher */}
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center justify-between gap-2 shrink-0">
               <button
                 type="button"
                 onClick={() => setIsExpanded(false)}
@@ -242,7 +259,7 @@ export const AudioPlayerBar: React.FC = () => {
                     data-testid="switch-to-audio-btn"
                     aria-pressed={activeFormat === 'audio'}
                     onClick={() => void switchFormat('audio')}
-                    className={`min-h-[36px] px-3.5 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap ${
+                    className={`min-h-[44px] px-3 sm:px-3.5 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap ${
                       activeFormat === 'audio'
                         ? 'bg-[#E5A93C] text-[#0B0B0E]'
                         : 'text-[#A39E93] hover:text-[#F5F3EE]'
@@ -256,7 +273,7 @@ export const AudioPlayerBar: React.FC = () => {
                     data-testid="switch-to-video-btn"
                     aria-pressed={activeFormat === 'video'}
                     onClick={() => void switchFormat('video')}
-                    className={`min-h-[36px] px-3.5 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap ${
+                    className={`min-h-[44px] px-3 sm:px-3.5 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap ${
                       activeFormat === 'video'
                         ? 'bg-[#E5A93C] text-[#0B0B0E]'
                         : 'text-[#A39E93] hover:text-[#F5F3EE]'
@@ -283,49 +300,111 @@ export const AudioPlayerBar: React.FC = () => {
               </button>
             </div>
 
-            {/* Stage: Video Player OR Cover Art */}
-            <div className="flex flex-col items-center text-center space-y-5">
-              {activeFormat === 'video' ? (
-                <div className="w-full">
-                  <VideoPlayer isExpandedView={isExpanded} />
+            {/* Stage: Adaptive Video Player (9:16 or 16:9 matching source) OR Audio Cover Art */}
+            {activeFormat === 'video' ? (
+              <div
+                className={`flex-1 flex flex-col items-center justify-center min-h-0 ${
+                  activeChoicePoint ? 'lg:flex-row lg:items-center lg:gap-6 gap-3' : 'gap-2.5'
+                }`}
+              >
+                <div className="w-full flex flex-col items-center text-center gap-2 shrink-0">
+                  <VideoPlayer
+                    isExpandedView={isExpanded}
+                    maxHeightCss={
+                      activeChoicePoint
+                        ? 'min(42dvh, 360px)'
+                        : 'calc(100dvh - 15rem - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px))'
+                    }
+                    maxWidthCss={activeChoicePoint ? '210px' : '460px'}
+                    landscapeMaxWidthCss={activeChoicePoint ? '480px' : '860px'}
+                  />
+                  <div className="space-y-0.5 max-w-md px-2">
+                    <p className="text-[11px] font-mono-tabular text-[#E5A93C] truncate">
+                      {storyTitle} · {t('common.episode')} {currentEpisode.episodeNumber}
+                    </p>
+                    <h2 className="font-display text-lg sm:text-xl font-semibold text-[#F5F3EE] text-balance leading-snug">
+                      {epTitle}
+                    </h2>
+                  </div>
                 </div>
-              ) : (
-                <div className="w-56 sm:w-68 rounded-2xl overflow-hidden border border-white/10 shadow-2xl shadow-black/60">
-                  <StoryArtwork story={currentStory} aspect="poster" />
-                </div>
-              )}
 
-              <div className="space-y-1.5 max-w-xl">
-                <p className="text-xs font-mono-tabular text-[#E5A93C]">
-                  {storyTitle} · {t('common.episode')} {currentEpisode.episodeNumber}
-                </p>
-                <h2 className="font-display text-2xl sm:text-3xl font-semibold text-[#F5F3EE] text-balance">
-                  {epTitle}
-                </h2>
-                <p className="text-sm text-[#A39E93]">{currentStory.creatorName}</p>
+                {activeChoicePoint && (
+                  <div className="w-full max-w-xl">
+                    <ChoiceOverlay
+                      choicePoint={activeChoicePoint}
+                      onSelectOption={(opt) => void chooseBranchOption(opt)}
+                      onRewind={dismissChoiceAndRewind}
+                    />
+                  </div>
+                )}
+
+                {errorMessage && (
+                  <p
+                    role="alert"
+                    className="text-xs text-rose-300 bg-rose-950/40 border border-rose-500/20 rounded-lg px-4 py-2"
+                  >
+                    {errorMessage}
+                  </p>
+                )}
               </div>
+            ) : (
+              <>
+                <div className="flex flex-col items-center text-center space-y-4">
+                  {activeChoicePoint ? (
+                    <div className="w-full flex items-center gap-4 text-left rounded-2xl bg-[#141418]/90 border border-white/10 p-3.5">
+                      <div className="w-16 sm:w-20 rounded-xl overflow-hidden border border-white/10 shrink-0">
+                        <StoryArtwork story={currentStory} aspect="poster" />
+                      </div>
+                      <div className="min-w-0 space-y-1">
+                        <p className="text-xs font-mono-tabular text-[#E5A93C] truncate">
+                          {storyTitle} · {t('common.episode')} {currentEpisode.episodeNumber}
+                        </p>
+                        <h2 className="font-display text-lg sm:text-2xl font-semibold text-[#F5F3EE] truncate">
+                          {epTitle}
+                        </h2>
+                        <p className="text-xs text-[#A39E93] truncate">{currentStory.creatorName}</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="w-56 sm:w-68 rounded-2xl overflow-hidden border border-white/10 shadow-2xl shadow-black/60">
+                        <StoryArtwork story={currentStory} aspect="poster" />
+                      </div>
+                      <div className="space-y-1.5 max-w-xl">
+                        <p className="text-xs font-mono-tabular text-[#E5A93C]">
+                          {storyTitle} · {t('common.episode')} {currentEpisode.episodeNumber}
+                        </p>
+                        <h2 className="font-display text-2xl sm:text-3xl font-semibold text-[#F5F3EE] text-balance">
+                          {epTitle}
+                        </h2>
+                        <p className="text-sm text-[#A39E93]">{currentStory.creatorName}</p>
+                      </div>
+                    </>
+                  )}
 
-              {errorMessage && (
-                <p
-                  role="alert"
-                  className="text-xs text-rose-300 bg-rose-950/40 border border-rose-500/20 rounded-lg px-4 py-2"
-                >
-                  {errorMessage}
-                </p>
-              )}
-            </div>
+                  {errorMessage && (
+                    <p
+                      role="alert"
+                      className="text-xs text-rose-300 bg-rose-950/40 border border-rose-500/20 rounded-lg px-4 py-2"
+                    >
+                      {errorMessage}
+                    </p>
+                  )}
+                </div>
 
-            {/* Interactive Choice Overlay (countdown-free, glowing cards) */}
-            {activeChoicePoint && (
-              <ChoiceOverlay
-                choicePoint={activeChoicePoint}
-                onSelectOption={(opt) => void chooseBranchOption(opt)}
-                onRewind={dismissChoiceAndRewind}
-              />
+                {/* Interactive Choice Overlay in Audio Mode */}
+                {activeChoicePoint && (
+                  <ChoiceOverlay
+                    choicePoint={activeChoicePoint}
+                    onSelectOption={(opt) => void chooseBranchOption(opt)}
+                    onRewind={dismissChoiceAndRewind}
+                  />
+                )}
+              </>
             )}
 
             {/* Audio Transport Controls (shown in audio mode, plus episode navigation in both modes) */}
-            <div className="space-y-5 pb-4">
+            <div className={activeFormat === 'video' ? 'space-y-2 pb-1 shrink-0' : 'space-y-5 pb-4'}>
               {activeFormat === 'audio' && (
                 <>
                   {/* Seek Slider */}
@@ -412,14 +491,15 @@ export const AudioPlayerBar: React.FC = () => {
                   </div>
 
                   {/* Speed Selector */}
-                  <div className="flex flex-wrap items-center justify-center gap-1.5">
+                  <div className="flex flex-wrap items-center justify-center gap-2" role="group" aria-label={t('player.speed')}>
                     {PLAYBACK_SPEEDS.map((spd) => (
                       <button
                         key={spd}
                         type="button"
                         data-testid={`speed-btn-${spd}`}
+                        aria-pressed={playbackRate === spd}
                         onClick={() => setPlaybackRate(spd)}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-mono-tabular transition-colors ${
+                        className={`min-w-[44px] min-h-[44px] px-3 rounded-lg text-xs font-mono-tabular transition-colors ${
                           playbackRate === spd
                             ? 'bg-[#E5A93C] text-[#0B0B0E] font-semibold'
                             : 'bg-[#141418] text-[#A39E93] border border-white/10 hover:text-[#F5F3EE]'
@@ -441,7 +521,7 @@ export const AudioPlayerBar: React.FC = () => {
                         type="button"
                         onClick={() => void playPreviousEpisode()}
                         disabled={!hasPrevious}
-                        className="min-h-[38px] px-3.5 rounded-xl bg-[#141418] border border-white/10 text-xs text-[#F5F3EE] disabled:opacity-35 inline-flex items-center gap-1.5 hover:border-white/25 transition-colors"
+                        className="min-h-[44px] px-4 rounded-xl bg-[#141418] border border-white/10 text-xs text-[#F5F3EE] disabled:opacity-35 inline-flex items-center gap-1.5 hover:border-white/25 transition-colors"
                       >
                         <SkipBack className="w-3.5 h-3.5" aria-hidden="true" />
                         {t('player.prevEpisode')}
@@ -450,7 +530,7 @@ export const AudioPlayerBar: React.FC = () => {
                         type="button"
                         onClick={() => void playNextEpisode()}
                         disabled={!hasNext}
-                        className="min-h-[38px] px-3.5 rounded-xl bg-[#141418] border border-white/10 text-xs text-[#F5F3EE] disabled:opacity-35 inline-flex items-center gap-1.5 hover:border-white/25 transition-colors"
+                        className="min-h-[44px] px-4 rounded-xl bg-[#141418] border border-white/10 text-xs text-[#F5F3EE] disabled:opacity-35 inline-flex items-center gap-1.5 hover:border-white/25 transition-colors"
                       >
                         {t('player.nextEpisode')}
                         <SkipForward className="w-3.5 h-3.5" aria-hidden="true" />
@@ -463,7 +543,7 @@ export const AudioPlayerBar: React.FC = () => {
                       type="button"
                       data-testid="open-choice-btn"
                       onClick={openChoicePreview}
-                      className="min-h-[38px] px-4 rounded-xl bg-[#E5A93C]/15 border border-[#E5A93C]/45 text-[#F3C669] hover:bg-[#E5A93C] hover:text-[#0B0B0E] text-xs font-semibold inline-flex items-center gap-1.5 transition-colors"
+                      className="min-h-[44px] px-4 rounded-xl bg-[#E5A93C]/15 border border-[#E5A93C]/45 text-[#F3C669] hover:bg-[#E5A93C] hover:text-[#0B0B0E] text-xs font-semibold inline-flex items-center gap-1.5 transition-colors"
                     >
                       <Sparkles className="w-3.5 h-3.5" aria-hidden="true" />
                       {t('player.jumpToChoice')}
@@ -473,16 +553,26 @@ export const AudioPlayerBar: React.FC = () => {
               )}
 
               {/* Transparent MediaProvider metadata */}
-              <div className="rounded-xl bg-[#141418] border border-white/[0.08] px-4 py-3 text-xs text-[#A39E93] space-y-1">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span>{t('player.providerLabel')}</span>
-                  <span className="font-mono-tabular text-[#F5F3EE]">
+              <div
+                className={`rounded-xl bg-[#141418] border border-white/[0.08] text-xs text-[#A39E93] ${
+                  activeFormat === 'video' ? 'px-3 py-1.5' : 'px-4 py-3 space-y-1'
+                }`}
+              >
+                <div
+                  className={`flex items-center justify-between gap-2 ${
+                    activeFormat === 'video' ? 'flex-nowrap' : 'flex-wrap'
+                  }`}
+                >
+                  <span className="shrink-0">{t('player.providerLabel')}</span>
+                  <span className="font-mono-tabular text-[#F5F3EE] text-[11px] truncate min-w-0">
                     {activeMediaRef.provider} · {activeMediaRef.type} · {activeMediaRef.id}
                   </span>
                 </div>
-                <p className="text-[11px] text-[#78736A]">
-                  {mediaResolution?.label || t('player.demoAudioNotice')}
-                </p>
+                {activeFormat === 'audio' && (
+                  <p className="text-[11px] text-[#9B968B]">
+                    {mediaResolution?.label || t('player.demoAudioNotice')}
+                  </p>
+                )}
               </div>
             </div>
           </div>

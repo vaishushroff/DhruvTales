@@ -2,12 +2,21 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   canAccessEpisode,
+  DEFAULT_ECONOMY_SETTINGS,
   filterAndSortStories,
   formatDuration,
   formatPlayCount,
   getRemainingDailyUnlocks,
+  resolveEffectiveEpisodePrice,
 } from './episodeAccess';
-import type { DailyUnlockEntry, Episode, Story, UserProfile } from '../../types';
+import type {
+  DailyUnlockEntry,
+  EconomySettings,
+  Episode,
+  EpisodeUnlockRecord,
+  Story,
+  UserProfile,
+} from '../../types';
 
 const baseUser: UserProfile = {
   uid: 'user-1',
@@ -15,11 +24,10 @@ const baseUser: UserProfile = {
   displayName: 'Aarav',
   preferredLanguage: 'en',
   role: 'user',
-  subscriptionTier: 'free',
   avatarInitials: 'AA',
 };
 
-const makeEpisode = (tier: Episode['accessTier'], id = 'ep-1'): Episode => ({
+const makeEpisode = (priceCoins: number, id = 'ep-1'): Episode => ({
   id,
   storyId: 'story-1',
   creatorOwnerUid: 'creator-owner-1',
@@ -27,41 +35,102 @@ const makeEpisode = (tier: Episode['accessTier'], id = 'ep-1'): Episode => ({
   title: 'Episode 3',
   titleHi: 'एपिसोड 3',
   durationSec: 420,
-  accessTier: tier,
+  priceCoins,
   mediaRef: { provider: 'demo', id: 'demo-track-1', type: 'audio' },
   publishedAt: '2026-10-01T00:00:00Z',
 });
 
-test('canAccessEpisode allows free episodes for guests and signed-in users', () => {
-  const freeEp = makeEpisode('free');
+test('canAccessEpisode allows free episodes (priceCoins = 0) for guests and signed-in users', () => {
+  const freeEp = makeEpisode(0);
   assert.equal(canAccessEpisode(null, freeEp).allowed, true);
   assert.equal(canAccessEpisode(baseUser, freeEp).reason, 'free_episode');
 });
 
-test('canAccessEpisode allows premium users and admins on all tiers', () => {
-  const premEp = makeEpisode('premium', 'ep-prem');
-  const premUser: UserProfile = { ...baseUser, subscriptionTier: 'premium' };
+test('canAccessEpisode allows permanent coin unlock, creator owner, and admin on paid episodes', () => {
+  const paidEp = makeEpisode(15, 'ep-paid');
   const adminUser: UserProfile = { ...baseUser, role: 'admin' };
+  const ownerCreator: UserProfile = { ...baseUser, uid: 'creator-owner-1', role: 'creator' };
 
-  assert.equal(canAccessEpisode(baseUser, premEp).allowed, false);
-  assert.equal(canAccessEpisode(baseUser, premEp).reason, 'requires_premium');
-  assert.equal(canAccessEpisode(premUser, premEp).allowed, true);
-  assert.equal(canAccessEpisode(premUser, premEp).reason, 'premium_subscription');
-  assert.equal(canAccessEpisode(adminUser, premEp).allowed, true);
-  assert.equal(canAccessEpisode(adminUser, premEp).reason, 'admin_or_creator_owner');
+  const locked = canAccessEpisode(baseUser, paidEp, {
+    economySettings: { ...DEFAULT_ECONOMY_SETTINGS, dailyFreeEnabled: false },
+  });
+  assert.equal(locked.allowed, false);
+  assert.equal(locked.reason, 'requires_coin_unlock');
+  assert.equal(locked.effectivePriceCoins, 15);
+
+  const coinUnlock: EpisodeUnlockRecord = {
+    id: 'user-1_ep-paid',
+    uid: 'user-1',
+    episodeId: 'ep-paid',
+    storyId: 'story-1',
+    creatorId: 'creator-1',
+    pricePaidCoins: 15,
+    transactionId: 'tx-1',
+    unlockedAt: Date.now(),
+  };
+
+  const unlockedRes = canAccessEpisode(baseUser, paidEp, {
+    episodeUnlocks: [coinUnlock],
+  });
+  assert.equal(unlockedRes.allowed, true);
+  assert.equal(unlockedRes.reason, 'coin_unlocked');
+
+  assert.equal(canAccessEpisode(adminUser, paidEp).allowed, true);
+  assert.equal(canAccessEpisode(adminUser, paidEp).reason, 'admin_or_creator_owner');
+  assert.equal(canAccessEpisode(ownerCreator, paidEp).allowed, true);
+  assert.equal(canAccessEpisode(ownerCreator, paidEp).reason, 'admin_or_creator_owner');
 });
 
-test('canAccessEpisode enforces daily free unlock quota and claimed state', () => {
-  const dailyEp = makeEpisode('daily_unlock', 'ep-daily-1');
+test('resolveEffectiveEpisodePrice respects Admin story-level priceOverrideCoins (including 0 = free)', () => {
+  const ep = makeEpisode(20, 'ep-override');
+  assert.equal(resolveEffectiveEpisodePrice(ep, null), 20);
+  assert.equal(resolveEffectiveEpisodePrice(ep, { priceOverrideCoins: null }), 20);
+  assert.equal(resolveEffectiveEpisodePrice(ep, { priceOverrideCoins: 5 }), 5);
+  assert.equal(resolveEffectiveEpisodePrice(ep, { priceOverrideCoins: 0 }), 0);
+
+  const overriddenFree = canAccessEpisode(baseUser, ep, {
+    story: { priceOverrideCoins: 0 },
+  });
+  assert.equal(overriddenFree.allowed, true);
+  assert.equal(overriddenFree.reason, 'free_episode');
+});
+
+test('canAccessEpisode respects admin-configurable daily free episode setting and quota', () => {
+  const paidEp = makeEpisode(10, 'ep-daily-1');
   const today = '2026-11-23';
+  const ecoOn: EconomySettings = {
+    id: 'economy',
+    dailyFreeEnabled: true,
+    dailyFreeLimit: 2,
+    updatedAt: 0,
+  };
+  const ecoOff: EconomySettings = {
+    id: 'economy',
+    dailyFreeEnabled: false,
+    dailyFreeLimit: 2,
+    updatedAt: 0,
+  };
 
-  // Eligible when under daily quota
-  const eligible = canAccessEpisode(baseUser, dailyEp, { dailyUnlocks: [], todayDateKey: today });
+  // Eligible when enabled and under quota
+  const eligible = canAccessEpisode(baseUser, paidEp, {
+    dailyUnlocks: [],
+    economySettings: ecoOn,
+    todayDateKey: today,
+  });
   assert.equal(eligible.allowed, false);
-  assert.equal(eligible.canUnlockToday, true);
-  assert.equal(eligible.reason, 'eligible_for_daily_unlock');
+  assert.equal(eligible.canUseDailyFree, true);
+  assert.equal(eligible.reason, 'requires_coin_unlock');
 
-  // Claimed unlocks permanently allow playback
+  // Disabled by admin -> canUseDailyFree is false
+  const disabled = canAccessEpisode(baseUser, paidEp, {
+    dailyUnlocks: [],
+    economySettings: ecoOff,
+    todayDateKey: today,
+  });
+  assert.equal(disabled.canUseDailyFree, false);
+  assert.equal(getRemainingDailyUnlocks([], ecoOff, today), 0);
+
+  // Claimed daily unlock grants access
   const claimedUnlock: DailyUnlockEntry = {
     id: 'user-1_ep-daily-1',
     userId: 'user-1',
@@ -70,26 +139,27 @@ test('canAccessEpisode enforces daily free unlock quota and claimed state', () =
     unlockDate: today,
     createdAt: Date.now(),
   };
-  const unlockedRes = canAccessEpisode(baseUser, dailyEp, {
+  const unlockedRes = canAccessEpisode(baseUser, paidEp, {
     dailyUnlocks: [claimedUnlock],
+    economySettings: ecoOn,
     todayDateKey: today,
   });
   assert.equal(unlockedRes.allowed, true);
   assert.equal(unlockedRes.reason, 'daily_unlock_claimed');
 
-  // Quota reached blocks additional daily_unlock episodes today
+  // Quota reached disables daily free option for new episodes today
   const twoUnlocks: DailyUnlockEntry[] = [
     { ...claimedUnlock, id: 'u1', episodeId: 'other-1' },
     { ...claimedUnlock, id: 'u2', episodeId: 'other-2' },
   ];
-  assert.equal(getRemainingDailyUnlocks(twoUnlocks, today), 0);
-  const blocked = canAccessEpisode(baseUser, dailyEp, {
+  assert.equal(getRemainingDailyUnlocks(twoUnlocks, ecoOn, today), 0);
+  const blocked = canAccessEpisode(baseUser, paidEp, {
     dailyUnlocks: twoUnlocks,
+    economySettings: ecoOn,
     todayDateKey: today,
   });
   assert.equal(blocked.allowed, false);
-  assert.equal(blocked.canUnlockToday, false);
-  assert.equal(blocked.reason, 'daily_limit_reached');
+  assert.equal(blocked.canUseDailyFree, false);
 });
 
 test('formatDuration and formatPlayCount format clean tabular strings', () => {

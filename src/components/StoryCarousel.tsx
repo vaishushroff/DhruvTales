@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { memo, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import type { Category, ListeningHistoryEntry, Story } from '../types';
@@ -13,13 +13,14 @@ interface StoryCarouselProps {
   seeAllTo?: string;
 }
 
-export const StoryCarousel: React.FC<StoryCarouselProps> = ({
-  title,
-  stories,
-  categoriesById,
-  progressByStoryId,
-  seeAllTo,
-}) => {
+export const StoryCarousel: React.FC<StoryCarouselProps> = memo(
+  ({
+    title,
+    stories,
+    categoriesById,
+    progressByStoryId,
+    seeAllTo,
+  }) => {
   const { t } = useLanguage();
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -39,7 +40,7 @@ export const StoryCarousel: React.FC<StoryCarouselProps> = ({
           {seeAllTo && (
             <Link
               to={seeAllTo}
-              className="text-xs font-medium text-[#E5A93C] hover:text-[#F3C669] transition-colors whitespace-nowrap px-2 py-1"
+              className="min-h-[44px] inline-flex items-center text-xs font-medium text-[#E5A93C] hover:text-[#F3C669] transition-colors whitespace-nowrap px-2"
             >
               {t('common.seeAll')}
             </Link>
@@ -49,7 +50,7 @@ export const StoryCarousel: React.FC<StoryCarouselProps> = ({
               type="button"
               onClick={() => scrollByAmount(-1)}
               aria-label={`Scroll ${title} left`}
-              className="w-9 h-9 rounded-lg border border-white/10 bg-[#141418] text-[#A39E93] hover:text-[#F5F3EE] hover:border-white/20 flex items-center justify-center transition-colors"
+              className="min-w-[44px] min-h-[44px] rounded-lg border border-white/10 bg-[#141418] text-[#A39E93] hover:text-[#F5F3EE] hover:border-white/20 flex items-center justify-center transition-colors"
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
@@ -57,7 +58,7 @@ export const StoryCarousel: React.FC<StoryCarouselProps> = ({
               type="button"
               onClick={() => scrollByAmount(1)}
               aria-label={`Scroll ${title} right`}
-              className="w-9 h-9 rounded-lg border border-white/10 bg-[#141418] text-[#A39E93] hover:text-[#F5F3EE] hover:border-white/20 flex items-center justify-center transition-colors"
+              className="min-w-[44px] min-h-[44px] rounded-lg border border-white/10 bg-[#141418] text-[#A39E93] hover:text-[#F5F3EE] hover:border-white/20 flex items-center justify-center transition-colors"
             >
               <ChevronRight className="w-4 h-4" />
             </button>
@@ -81,4 +82,6 @@ export const StoryCarousel: React.FC<StoryCarouselProps> = ({
       </div>
     </section>
   );
-};
+});
+
+StoryCarousel.displayName = 'StoryCarousel';

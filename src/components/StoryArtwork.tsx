@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { memo, useState } from 'react';
 import type { CoverTheme, Story } from '../types';
+import { sanitizeSafeUrl } from '../utils/validation';
 
 interface ThemePalette {
   bg: string;
@@ -197,54 +198,72 @@ interface StoryArtworkProps {
   className?: string;
 }
 
-export const StoryArtwork: React.FC<StoryArtworkProps> = ({
-  story,
-  aspect = 'poster',
-  useBackdrop = false,
-  showTitleOverlay = false,
-  className = '',
-}) => {
-  const [imgFailed, setImgFailed] = useState(false);
-  const src = useBackdrop ? story.backdropUrl || story.coverUrl : story.coverUrl;
-  const palette = COVER_THEMES[story.coverTheme] ?? COVER_THEMES['mythology-gold'];
+export const StoryArtwork: React.FC<StoryArtworkProps> = memo(
+  ({
+    story,
+    aspect = 'poster',
+    useBackdrop = false,
+    showTitleOverlay = false,
+    className = '',
+  }) => {
+    const [imgFailed, setImgFailed] = useState(false);
+    const [imgLoaded, setImgLoaded] = useState(false);
+    const rawSrc = useBackdrop ? story.backdropUrl || story.coverUrl : story.coverUrl;
+    const src = sanitizeSafeUrl(rawSrc);
+    const palette = COVER_THEMES[story.coverTheme] ?? COVER_THEMES['mythology-gold'];
 
-  const aspectClass =
-    aspect === 'landscape'
-      ? 'aspect-[16/9]'
-      : aspect === 'square'
-        ? 'aspect-square'
-        : 'aspect-[3/4]';
+    const aspectClass =
+      aspect === 'landscape'
+        ? 'aspect-[16/9]'
+        : aspect === 'square'
+          ? 'aspect-square'
+          : 'aspect-[3/4]';
 
-  const hasPhoto = Boolean(src) && !imgFailed;
+    const hasPhoto = Boolean(src) && !imgFailed;
 
-  return (
-    <div
-      className={`relative overflow-hidden bg-gradient-to-br ${palette.bg} ${aspectClass} ${className}`}
-    >
-      {hasPhoto ? (
-        <img
-          src={src}
-          alt={story.title}
-          referrerPolicy="no-referrer"
-          onError={() => setImgFailed(true)}
-          className="w-full h-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.03]"
-          loading="lazy"
-        />
-      ) : (
-        <div className="w-full h-full relative">
-          <IllustratedMotif palette={palette} />
-          <div className="absolute inset-x-4 bottom-5 text-left pointer-events-none">
-            <p className="font-display text-lg leading-snug font-semibold text-[#F5F3EE] line-clamp-2 drop-shadow">
-              {story.title}
-            </p>
-            <p className="text-[11px] text-[#A39E93] mt-1 truncate">{story.creatorName}</p>
+    return (
+      <div
+        className={`relative overflow-hidden bg-gradient-to-br ${palette.bg} ${aspectClass} ${className}`}
+      >
+        {hasPhoto ? (
+          <>
+            {!imgLoaded && (
+              <div
+                aria-hidden="true"
+                className="absolute inset-0 bg-[#18181F] animate-pulse"
+              />
+            )}
+            <img
+              src={src}
+              alt={story.title}
+              referrerPolicy="no-referrer"
+              decoding="async"
+              loading="lazy"
+              onLoad={() => setImgLoaded(true)}
+              onError={() => setImgFailed(true)}
+              className={`w-full h-full object-cover transition-all duration-500 ease-out group-hover:scale-[1.03] ${
+                imgLoaded ? 'opacity-100' : 'opacity-0'
+              }`}
+            />
+          </>
+        ) : (
+          <div className="w-full h-full relative">
+            <IllustratedMotif palette={palette} />
+            <div className="absolute inset-x-4 bottom-5 text-left pointer-events-none">
+              <p className="font-display text-lg leading-snug font-semibold text-[#F5F3EE] line-clamp-2 drop-shadow">
+                {story.title}
+              </p>
+              <p className="text-[11px] text-[#B2ADA2] mt-1 truncate">{story.creatorName}</p>
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {showTitleOverlay && hasPhoto && (
-        <div className="absolute inset-0 bg-gradient-to-t from-[#0B0B0E]/85 via-[#0B0B0E]/20 to-transparent pointer-events-none" />
-      )}
-    </div>
-  );
-};
+        {showTitleOverlay && hasPhoto && (
+          <div className="absolute inset-0 bg-gradient-to-t from-[#0B0B0E]/85 via-[#0B0B0E]/20 to-transparent pointer-events-none" />
+        )}
+      </div>
+    );
+  }
+);
+
+StoryArtwork.displayName = 'StoryArtwork';

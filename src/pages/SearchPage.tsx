@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Search as SearchIcon, X } from 'lucide-react';
 import { StoryCard } from '../components/StoryCard';
@@ -7,28 +7,66 @@ import { useLanguage } from '../hooks/useLanguage';
 import { filterAndSortStories } from '../services/access/episodeAccess';
 import type { Category, ListeningHistoryEntry } from '../types';
 
+const RESULTS_PAGE_SIZE = 10;
+
 export const SearchPage: React.FC = () => {
   const { lang, t } = useLanguage();
-  const { categories, creators, stories, history } = useAppData();
+  const { categories, creators, stories, history, catalogLoading } = useAppData();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const queryText = searchParams.get('q') ?? '';
+  const urlQueryText = searchParams.get('q') ?? '';
   const selectedGenre = searchParams.get('genre') ?? 'all';
   const selectedLang = searchParams.get('lang') ?? 'all';
   const selectedCreator = searchParams.get('creator') ?? 'all';
   const sortBy = (searchParams.get('sort') as 'popular' | 'rating' | 'recent') || 'popular';
 
-  const updateParam = (key: string, value: string) => {
-    const next = new URLSearchParams(searchParams);
-    if (!value || value === 'all') {
-      next.delete(key);
-    } else {
-      next.set(key, value);
-    }
-    setSearchParams(next, { replace: true });
-  };
+  // Local search state + 200ms debounce so typing stays crisp and avoids thrashing URL/filter work
+  const [inputValue, setInputValue] = useState(urlQueryText);
+  const [debouncedQuery, setDebouncedQuery] = useState(urlQueryText);
+  const [visibleCount, setVisibleCount] = useState(RESULTS_PAGE_SIZE);
+
+  useEffect(() => {
+    setInputValue(urlQueryText);
+    setDebouncedQuery(urlQueryText);
+  }, [urlQueryText]);
+
+  const updateParam = useCallback(
+    (key: string, value: string) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (!value || value === 'all') {
+            next.delete(key);
+          } else {
+            next.set(key, value);
+          }
+          return next;
+        },
+        { replace: true }
+      );
+    },
+    [setSearchParams]
+  );
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedQuery(inputValue);
+      if (inputValue !== urlQueryText) {
+        updateParam('q', inputValue);
+      }
+    }, 200);
+    return () => window.clearTimeout(timer);
+  }, [inputValue, urlQueryText, updateParam]);
+
+  // Reset pagination whenever active filters change
+  useEffect(() => {
+    setVisibleCount(RESULTS_PAGE_SIZE);
+  }, [debouncedQuery, selectedGenre, selectedLang, selectedCreator, sortBy]);
 
   const resetFilters = () => {
+    setInputValue('');
+    setDebouncedQuery('');
+    setVisibleCount(RESULTS_PAGE_SIZE);
     setSearchParams(new URLSearchParams(), { replace: true });
   };
 
@@ -51,17 +89,24 @@ export const SearchPage: React.FC = () => {
   const results = useMemo(
     () =>
       filterAndSortStories(stories, {
-        query: queryText,
+        query: debouncedQuery,
         genreId: selectedGenre,
         language: selectedLang,
         creatorId: selectedCreator,
         sortBy,
       }),
-    [stories, queryText, selectedGenre, selectedLang, selectedCreator, sortBy]
+    [stories, debouncedQuery, selectedGenre, selectedLang, selectedCreator, sortBy]
   );
 
+  const visibleResults = useMemo(
+    () => results.slice(0, visibleCount),
+    [results, visibleCount]
+  );
+
+  const hasMoreResults = visibleCount < results.length;
+
   const hasActiveFilters =
-    Boolean(queryText) ||
+    Boolean(inputValue) ||
     selectedGenre !== 'all' ||
     selectedLang !== 'all' ||
     selectedCreator !== 'all';
@@ -89,17 +134,21 @@ export const SearchPage: React.FC = () => {
           <input
             id="story-search-input"
             type="search"
-            value={queryText}
-            onChange={(e) => updateParam('q', e.target.value)}
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
             placeholder={t('search.placeholder')}
-            className="w-full h-12 pl-11 pr-11 rounded-xl bg-[#141418] border border-white/10 text-sm text-[#F5F3EE] placeholder:text-[#78736A] focus:outline-none focus:border-[#E5A93C]"
+            className="w-full min-h-[48px] pl-11 pr-12 rounded-xl bg-[#141418] border border-white/10 text-sm text-[#F5F3EE] placeholder:text-[#9B968B] focus:outline-none focus:border-[#E5A93C]"
           />
-          {queryText && (
+          {inputValue && (
             <button
               type="button"
-              onClick={() => updateParam('q', '')}
+              onClick={() => {
+                setInputValue('');
+                setDebouncedQuery('');
+                updateParam('q', '');
+              }}
               aria-label="Clear search query"
-              className="absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-lg flex items-center justify-center text-[#A39E93] hover:text-[#F5F3EE]"
+              className="absolute right-1 top-1/2 -translate-y-1/2 min-w-[44px] min-h-[44px] rounded-lg flex items-center justify-center text-[#A39E93] hover:text-[#F5F3EE]"
             >
               <X className="w-4 h-4" />
             </button>
@@ -114,8 +163,9 @@ export const SearchPage: React.FC = () => {
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
+              aria-pressed={selectedGenre === 'all'}
               onClick={() => updateParam('genre', 'all')}
-              className={`min-h-[38px] px-3.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
+              className={`min-h-[44px] px-4 rounded-xl text-xs font-medium transition-colors whitespace-nowrap ${
                 selectedGenre === 'all'
                   ? 'bg-[#E5A93C] text-[#0B0B0E] font-semibold'
                   : 'bg-[#141418] border border-white/10 text-[#A39E93] hover:text-[#F5F3EE]'
@@ -127,8 +177,9 @@ export const SearchPage: React.FC = () => {
               <button
                 key={cat.id}
                 type="button"
+                aria-pressed={selectedGenre === cat.id}
                 onClick={() => updateParam('genre', cat.id)}
-                className={`min-h-[38px] px-3.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
+                className={`min-h-[44px] px-4 rounded-xl text-xs font-medium transition-colors whitespace-nowrap ${
                   selectedGenre === cat.id
                     ? 'bg-[#E5A93C] text-[#0B0B0E] font-semibold'
                     : 'bg-[#141418] border border-white/10 text-[#A39E93] hover:text-[#F5F3EE]'
@@ -156,8 +207,9 @@ export const SearchPage: React.FC = () => {
                 <button
                   key={opt.id}
                   type="button"
+                  aria-pressed={selectedLang === opt.id}
                   onClick={() => updateParam('lang', opt.id)}
-                  className={`min-h-[36px] rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
+                  className={`min-h-[44px] rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
                     selectedLang === opt.id
                       ? 'bg-[#25252E] text-[#F5F3EE]'
                       : 'text-[#A39E93] hover:text-[#F5F3EE]'
@@ -178,7 +230,7 @@ export const SearchPage: React.FC = () => {
               id="creator-filter"
               value={selectedCreator}
               onChange={(e) => updateParam('creator', e.target.value)}
-              className="w-full h-[46px] px-3.5 rounded-xl bg-[#141418] border border-white/10 text-xs text-[#F5F3EE] focus:outline-none focus:border-[#E5A93C]"
+              className="w-full min-h-[48px] px-3.5 rounded-xl bg-[#141418] border border-white/10 text-xs text-[#F5F3EE] focus:outline-none focus:border-[#E5A93C]"
             >
               <option value="all">{t('common.all')}</option>
               {creators.map((c) => (
@@ -198,7 +250,7 @@ export const SearchPage: React.FC = () => {
               id="sort-filter"
               value={sortBy}
               onChange={(e) => updateParam('sort', e.target.value)}
-              className="w-full h-[46px] px-3.5 rounded-xl bg-[#141418] border border-white/10 text-xs text-[#F5F3EE] focus:outline-none focus:border-[#E5A93C]"
+              className="w-full min-h-[48px] px-3.5 rounded-xl bg-[#141418] border border-white/10 text-xs text-[#F5F3EE] focus:outline-none focus:border-[#E5A93C]"
             >
               <option value="popular">{t('search.sortPopular')}</option>
               <option value="rating">{t('search.sortRating')}</option>
@@ -210,22 +262,41 @@ export const SearchPage: React.FC = () => {
 
       {/* Results Header */}
       <div className="flex items-center justify-between gap-4 border-b border-white/[0.08] pb-3">
-        <p className="text-xs text-[#A39E93] tabular-nums">
-          <strong className="text-[#F5F3EE]">{results.length}</strong> {t('search.resultsCount')}
+        <p className="text-xs text-[#A39E93] tabular-nums" aria-live="polite">
+          {catalogLoading && stories.length === 0 ? (
+            <span>{t('common.loading')}</span>
+          ) : (
+            <>
+              <strong className="text-[#F5F3EE]">{results.length}</strong> {t('search.resultsCount')}
+            </>
+          )}
         </p>
         {hasActiveFilters && (
           <button
             type="button"
             onClick={resetFilters}
-            className="text-xs font-medium text-[#E5A93C] hover:text-[#F3C669] transition-colors"
+            className="min-h-[44px] px-3 text-xs font-medium text-[#E5A93C] hover:text-[#F3C669] transition-colors"
           >
             {t('search.clearFilters')}
           </button>
         )}
       </div>
 
-      {/* Results Grid or Empty State */}
-      {results.length === 0 ? (
+      {/* Results Grid, Loading Skeleton, or Empty State */}
+      {catalogLoading && stories.length === 0 ? (
+        <div
+          aria-label={t('common.loading')}
+          className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-5 animate-pulse"
+        >
+          {Array.from({ length: 10 }).map((_, idx) => (
+            <div key={idx} className="space-y-2.5">
+              <div className="aspect-[3/4] rounded-xl bg-[#141418]" />
+              <div className="h-3.5 w-3/4 rounded bg-[#141418]" />
+              <div className="h-3 w-1/2 rounded bg-[#141418]" />
+            </div>
+          ))}
+        </div>
+      ) : results.length === 0 ? (
         <div className="rounded-2xl bg-[#141418] border border-white/[0.08] p-10 text-center space-y-3">
           <h2 className="font-display text-xl font-semibold text-[#F5F3EE]">
             {t('search.emptyTitle')}
@@ -234,21 +305,38 @@ export const SearchPage: React.FC = () => {
           <button
             type="button"
             onClick={resetFilters}
-            className="mt-2 px-5 py-2.5 rounded-xl bg-[#E5A93C] text-[#0B0B0E] text-xs font-semibold hover:bg-[#F3C669] transition-colors"
+            className="mt-2 min-h-[44px] px-5 rounded-xl bg-[#E5A93C] text-[#0B0B0E] text-xs font-semibold hover:bg-[#F3C669] transition-colors"
           >
             {t('search.clearFilters')}
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-5">
-          {results.map((story) => (
-            <StoryCard
-              key={story.id}
-              story={story}
-              category={categoriesById[story.genreId]}
-              progress={progressByStoryId[story.id]}
-            />
-          ))}
+        <div className="space-y-8">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-5">
+            {visibleResults.map((story) => (
+              <StoryCard
+                key={story.id}
+                story={story}
+                category={categoriesById[story.genreId]}
+                progress={progressByStoryId[story.id]}
+              />
+            ))}
+          </div>
+
+          {hasMoreResults && (
+            <div className="flex justify-center pt-2">
+              <button
+                type="button"
+                data-testid="search-load-more"
+                onClick={() => setVisibleCount((prev) => prev + RESULTS_PAGE_SIZE)}
+                className="min-h-[44px] px-6 rounded-xl bg-[#141418] border border-white/15 text-xs font-semibold text-[#F5F3EE] hover:border-[#E5A93C]/50 hover:text-[#F3C669] transition-colors tabular-nums"
+              >
+                {lang === 'hi'
+                  ? `और कहानियाँ लोड करें (${results.length - visibleResults.length} शेष)`
+                  : `Load More Stories (${results.length - visibleResults.length} more)`}
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

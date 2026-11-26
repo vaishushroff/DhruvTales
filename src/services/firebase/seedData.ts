@@ -1034,13 +1034,14 @@ export const SEED_EPISODES: Episode[] = SEED_STORIES.flatMap((story) => {
     const template = customBlueprints?.[idx] ?? GENERIC_ARC[idx % GENERIC_ARC.length];
 
     // Interactive branching stories keep all branches free so full playthroughs never stall mid-choice.
-    const accessTier: Episode['accessTier'] = story.isInteractive
-      ? 'free'
+    // Standard serialized stories: Ep 1-2 Free (0 coins), Ep 3-4 10 coins, Ep 5+ 20 coins.
+    const priceCoins = story.isInteractive
+      ? 0
       : epNum <= 2
-        ? 'free'
+        ? 0
         : epNum <= 4
-          ? 'daily_unlock'
-          : 'premium';
+          ? 10
+          : 20;
 
     const epId = `${story.id}-ep-${epNum}`;
     const audioRef = {
@@ -1059,8 +1060,7 @@ export const SEED_EPISODES: Episode[] = SEED_STORIES.flatMap((story) => {
       description: template.descEn,
       descriptionHi: template.descHi,
       durationSec: template.dur,
-      accessTier,
-      dailyUnlockOrder: accessTier === 'daily_unlock' ? epNum - 2 : 0,
+      priceCoins,
       mediaRef: audioRef,
       audioRef,
       publishedAt: story.publishedAt,

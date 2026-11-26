@@ -2,22 +2,29 @@
   "entities": {
     "UserProfile": {
       "title": "UserProfile",
-      "description": "Private user account profile, role, preferences, preferred media format, and simulated subscription tier.",
+      "description": "Private user account profile, role, preferences, preferred media format, and disabled status.",
       "type": "object",
       "properties": {
         "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "email": { "type": "string", "format": "email", "maxLength": 200 },
+        "email": { "type": "string", "maxLength": 200 },
+        "phoneNumber": { "type": "string", "maxLength": 32 },
         "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
         "bio": { "type": "string", "maxLength": 300 },
-        "preferredLanguage": { "type": "string", "enum": ["en", "hi"] },
+        "preferredLanguage": { "type": "string", "minLength": 2, "maxLength": 10 },
         "preferredFormat": { "type": "string", "enum": ["audio", "video"] },
         "role": { "type": "string", "enum": ["user", "creator", "admin"] },
-        "subscriptionTier": { "type": "string", "enum": ["free", "premium"] },
+        "isDisabled": { "type": "boolean" },
+        "warningCount": { "type": "number", "description": "Server-only concurrent device login warning counter (auto-banned at 3)." },
+        "banned": { "type": "boolean", "description": "Server-only account ban flag enforced across all /api routes." },
+        "bannedAt": { "type": "string", "format": "date-time" },
+        "banReason": { "type": "string", "maxLength": 300 },
+        "activeDevice": { "type": "object", "description": "Server-only single active browser device record (deviceId, deviceInfo, registeredAt, lastSeen)." },
+        "lastSeen": { "type": "string", "format": "date-time" },
         "avatarInitials": { "type": "string", "minLength": 1, "maxLength": 4 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["uid", "email", "displayName", "preferredLanguage", "role", "subscriptionTier", "avatarInitials", "createdAt", "updatedAt"]
+      "required": ["uid", "email", "displayName", "preferredLanguage", "role", "avatarInitials", "createdAt", "updatedAt"]
     },
     "AdminRecord": {
       "title": "AdminRecord",
@@ -67,7 +74,7 @@
     },
     "Story": {
       "title": "Story",
-      "description": "Serialized audio/video story catalog metadata (separated from media files).",
+      "description": "Serialized audio/video story catalog metadata with optional Admin-only story-level coin price override.",
       "type": "object",
       "properties": {
         "id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
@@ -94,6 +101,10 @@
         "visibility": { "type": "string", "enum": ["published", "draft", "archived"] },
         "format": { "type": "string", "enum": ["audio", "video", "hybrid"] },
         "isInteractive": { "type": "boolean" },
+        "priceOverrideCoins": { "type": ["number", "null"], "description": "Admin-only story-level coin price override applied to all episodes in this story." },
+        "isDeleted": { "type": "boolean", "description": "Safe soft-delete flag (hidden from listeners, restorable by Admin)." },
+        "deletedAt": { "type": ["string", "null"], "format": "date-time" },
+        "deletedByUid": { "type": ["string", "null"], "maxLength": 128 },
         "publishedAt": { "type": "string", "format": "date-time" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
@@ -108,7 +119,7 @@
     },
     "Episode": {
       "title": "Episode",
-      "description": "Individual episode metadata referencing audio/video via provider-agnostic MediaRef and optional interactive choicePoint.",
+      "description": "Individual episode metadata referencing audio/video via provider-agnostic MediaRef and immutable-for-creator priceCoins (0 = free).",
       "type": "object",
       "properties": {
         "id": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
@@ -120,29 +131,110 @@
         "description": { "type": "string", "maxLength": 600 },
         "descriptionHi": { "type": "string", "maxLength": 600 },
         "durationSec": { "type": "number" },
-        "accessTier": { "type": "string", "enum": ["free", "daily_unlock", "premium"] },
-        "dailyUnlockOrder": { "type": "number" },
+        "priceCoins": { "type": "number", "description": "Coin unlock price (0 = free). Set once by creator on creation; editable anytime by Admin." },
         "mediaRef": { "type": "object", "description": "Primary audio mediaRef { provider, id, type }" },
         "audioRef": { "type": "object", "description": "Explicit audio MediaRef { provider, id, type }" },
         "videoMediaRef": { "type": "object", "description": "Optional video MediaRef { provider, id, type } for Audio/Video switching" },
         "choicePoint": { "type": "object", "description": "Optional interactive branching choicePoint triggered at timestamp or episode end" },
         "isEnding": { "type": "boolean" },
+        "isDeleted": { "type": "boolean", "description": "Safe soft-delete flag (hidden from listeners, restorable by Admin)." },
+        "deletedAt": { "type": ["string", "null"], "format": "date-time" },
+        "deletedByUid": { "type": ["string", "null"], "maxLength": 128 },
         "publishedAt": { "type": "string", "format": "date-time" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": [
         "id", "storyId", "creatorOwnerUid", "episodeNumber", "title", "titleHi",
-        "durationSec", "accessTier", "mediaRef", "publishedAt", "createdAt"
+        "durationSec", "priceCoins", "mediaRef", "publishedAt", "createdAt"
       ]
+    },
+    "CoinWallet": {
+      "title": "CoinWallet",
+      "description": "Server-authoritative coin wallet per user (read-only for clients; written only by Vercel /api/coins/* using Firebase Admin SDK).",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "balance": { "type": "number" },
+        "lifetimePurchased": { "type": "number" },
+        "lifetimeSpent": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "balance", "lifetimePurchased", "lifetimeSpent", "updatedAt"]
+    },
+    "CoinTransaction": {
+      "title": "CoinTransaction",
+      "description": "Immutable coin ledger entry created exclusively by server-side Admin SDK routes.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "type": { "type": "string", "enum": ["purchase", "spend", "admin_adjust", "bonus", "refund"] },
+        "amount": { "type": "number" },
+        "balanceAfter": { "type": "number" },
+        "episodeId": { "type": ["string", "null"] },
+        "storyId": { "type": ["string", "null"] },
+        "creatorId": { "type": ["string", "null"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "note": { "type": "string", "maxLength": 300 }
+      },
+      "required": ["id", "uid", "type", "amount", "balanceAfter", "createdAt", "note"]
+    },
+    "EpisodeUnlock": {
+      "title": "EpisodeUnlock",
+      "description": "Permanent per-user paid episode unlock record written atomically by POST /api/coins/unlock.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "episodeId": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "storyId": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "creatorId": { "type": "string", "maxLength": 128 },
+        "pricePaidCoins": { "type": "number" },
+        "transactionId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "unlockedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "uid", "episodeId", "storyId", "pricePaidCoins", "transactionId", "unlockedAt"]
+    },
+    "CoinPackage": {
+      "title": "CoinPackage",
+      "description": "Admin-defined coin bundle available for simulated checkout via PaymentProvider.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "nameHi": { "type": "string", "maxLength": 80 },
+        "coins": { "type": "number" },
+        "bonusCoins": { "type": "number" },
+        "priceInr": { "type": "number" },
+        "active": { "type": "boolean" },
+        "sortOrder": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "coins", "bonusCoins", "priceInr", "active", "sortOrder"]
+    },
+    "EconomySettings": {
+      "title": "EconomySettings",
+      "description": "Admin-configurable platform economy settings (daily free episode toggle and daily limit).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "enum": ["economy"] },
+        "dailyFreeEnabled": { "type": "boolean" },
+        "dailyFreeLimit": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "updatedByUid": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["id", "dailyFreeEnabled", "dailyFreeLimit", "updatedAt"]
     },
     "ListeningHistory": {
       "title": "ListeningHistory",
-      "description": "Per-user episode playback progress and resume position.",
+      "description": "Per-user episode playback progress, resume position, and denormalized storyOwnerUid for creator analytics.",
       "type": "object",
       "properties": {
         "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "storyId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "storyOwnerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "episodeId": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "episodeNumber": { "type": "number" },
         "positionSec": { "type": "number" },
@@ -167,7 +259,7 @@
     },
     "DailyUnlock": {
       "title": "DailyUnlock",
-      "description": "Record of daily free-episode unlocks claimed by a user.",
+      "description": "Record of daily free-episode unlocks claimed by a user (governed by platformSettings/economy).",
       "type": "object",
       "properties": {
         "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
@@ -178,21 +270,6 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "userId", "storyId", "episodeId", "unlockDate", "createdAt"]
-    },
-    "Subscription": {
-      "title": "Subscription",
-      "description": "Simulated subscription state for Free/Premium UI and access evaluation.",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "plan": { "type": "string", "enum": ["free", "premium_monthly", "premium_annual"] },
-        "status": { "type": "string", "enum": ["active", "cancelled"] },
-        "isSimulated": { "type": "boolean" },
-        "startedAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["id", "userId", "plan", "status", "isSimulated", "startedAt", "updatedAt"]
     },
     "InteractiveChoice": {
       "title": "InteractiveChoice",
@@ -226,12 +303,88 @@
         "chosenAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "userId", "storyId", "episodeId", "choicePointId", "optionId", "optionLabelEn", "optionLabelHi", "nextEpisodeId", "chosenAt"]
+    },
+    "CreatorRequest": {
+      "title": "CreatorRequest",
+      "description": "User application to become a Dhruv Tales creator, reviewed and approved/rejected by an Admin.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userEmail": { "type": "string", "format": "email", "maxLength": 200 },
+        "userName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "studioName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "handle": { "type": "string", "minLength": 2, "maxLength": 60 },
+        "language": { "type": "string", "enum": ["en", "hi", "bilingual"] },
+        "pitch": { "type": "string", "minLength": 10, "maxLength": 600 },
+        "sampleLink": { "type": "string", "maxLength": 300 },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "reviewNote": { "type": "string", "maxLength": 300 },
+        "reviewedByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "userEmail", "userName", "studioName", "handle", "language", "pitch", "status", "createdAt", "updatedAt"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable, append-only audit log entry recorded for every Admin dashboard action.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actorUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actorEmail": { "type": "string", "format": "email", "maxLength": 200 },
+        "action": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "targetCollection": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "targetId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 400 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "actorUid", "actorEmail", "action", "targetCollection", "targetId", "summary", "createdAt"]
+    },
+    "SessionLog": {
+      "title": "SessionLog",
+      "description": "Immutable server-written single-device session and violation log entry.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "deviceId": { "type": "string", "maxLength": 128 },
+        "deviceInfo": { "type": "object" },
+        "eventType": {
+          "type": "string",
+          "enum": ["login_registered", "logout", "violation_warning", "violation_ban", "admin_ban", "admin_unban", "admin_reset_warnings", "admin_force_logout"]
+        },
+        "warningCountAfter": { "type": "number" },
+        "bannedAfter": { "type": "boolean" },
+        "note": { "type": "string", "maxLength": 400 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "uid", "eventType", "warningCountAfter", "bannedAfter", "note", "createdAt"]
+    },
+    "SiteSettings": {
+      "title": "SiteSettings",
+      "description": "Live Admin-editable site branding, colors, hero banners, homepage sections, enabled languages, footer, and legal pages.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "enum": ["main"] },
+        "branding": { "type": "object" },
+        "footer": { "type": "object" },
+        "heroBanners": { "type": "array" },
+        "homepageSections": { "type": "array" },
+        "languages": { "type": "array" },
+        "defaultLanguage": { "type": "string", "minLength": 2, "maxLength": 10 },
+        "legalPages": { "type": "object" },
+        "updatedByUid": { "type": "string", "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "branding", "footer", "heroBanners", "homepageSections", "languages", "defaultLanguage", "legalPages", "updatedAt"]
     }
   },
   "firestore": {
     "/users/{userId}": {
       "schema": { "$ref": "#/entities/UserProfile" },
-      "description": "Private user profiles, preferred media format, and RBAC role assignments (PII isolated to owner/admin)."
+      "description": "Private user profiles, preferred media format, disabled status, and RBAC role assignments (PII isolated to owner/admin)."
     },
     "/admins/{adminId}": {
       "schema": { "$ref": "#/entities/AdminRecord" },
@@ -239,7 +392,7 @@
     },
     "/categories/{categoryId}": {
       "schema": { "$ref": "#/entities/Category" },
-      "description": "Public genre/category catalog."
+      "description": "Public genre/category catalog (Admin CRUD)."
     },
     "/creators/{creatorId}": {
       "schema": { "$ref": "#/entities/Creator" },
@@ -247,15 +400,35 @@
     },
     "/stories/{storyId}": {
       "schema": { "$ref": "#/entities/Story" },
-      "description": "Story catalog documents."
+      "description": "Story catalog documents (Creators edit/delete own; Admins curate all and manage story-level priceOverrideCoins)."
     },
     "/episodes/{episodeId}": {
       "schema": { "$ref": "#/entities/Episode" },
-      "description": "Episode metadata with provider-agnostic audio/video MediaRef and optional choicePoint."
+      "description": "Episode metadata with provider-agnostic audio/video MediaRef, priceCoins (creator set-once, admin editable), and optional choicePoint."
+    },
+    "/wallets/{userId}": {
+      "schema": { "$ref": "#/entities/CoinWallet" },
+      "description": "Server-authoritative coin wallets (read-only for owner/admin; written exclusively by /api/coins/* using Firebase Admin SDK)."
+    },
+    "/coinTransactions/{txId}": {
+      "schema": { "$ref": "#/entities/CoinTransaction" },
+      "description": "Immutable coin ledger entries (read-only for owner/admin; written exclusively by /api/coins/*)."
+    },
+    "/episodeUnlocks/{unlockId}": {
+      "schema": { "$ref": "#/entities/EpisodeUnlock" },
+      "description": "Permanent paid episode unlock records (read-only for owner/admin; written exclusively by /api/coins/unlock)."
+    },
+    "/coinPackages/{packageId}": {
+      "schema": { "$ref": "#/entities/CoinPackage" },
+      "description": "Admin-defined coin packages for mock checkout (public read for active packages; Admin CRUD)."
+    },
+    "/platformSettings/{settingId}": {
+      "schema": { "$ref": "#/entities/EconomySettings" },
+      "description": "Admin-configurable economy settings (dailyFreeEnabled, dailyFreeLimit)."
     },
     "/listeningHistory/{historyId}": {
       "schema": { "$ref": "#/entities/ListeningHistory" },
-      "description": "Per-user episode resume progress."
+      "description": "Per-user episode resume progress (readable by listener, owning story creator, or admin)."
     },
     "/bookmarks/{bookmarkId}": {
       "schema": { "$ref": "#/entities/Bookmark" },
@@ -265,10 +438,6 @@
       "schema": { "$ref": "#/entities/DailyUnlock" },
       "description": "Daily free-episode unlock claims per user."
     },
-    "/subscriptions/{subscriptionId}": {
-      "schema": { "$ref": "#/entities/Subscription" },
-      "description": "Mock subscription records per user."
-    },
     "/interactiveChoices/{choiceId}": {
       "schema": { "$ref": "#/entities/InteractiveChoice" },
       "description": "Interactive story branching nodes."
@@ -276,6 +445,22 @@
     "/userChoices/{userChoiceId}": {
       "schema": { "$ref": "#/entities/UserChoice" },
       "description": "Per-user interactive story branch selections (strictly user-owned)."
+    },
+    "/creatorRequests/{requestId}": {
+      "schema": { "$ref": "#/entities/CreatorRequest" },
+      "description": "Become-a-Creator applications submitted by users and reviewed by admins."
+    },
+    "/auditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Immutable admin audit trail (admin-only read/create, no updates or deletes)."
+    },
+    "/sessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/SessionLog" },
+      "description": "Immutable server-written single-device session and violation log (read-only for owner or admin)."
+    },
+    "/siteSettings/{settingId}": {
+      "schema": { "$ref": "#/entities/SiteSettings" },
+      "description": "Live Admin-managed site branding, colors, banners, homepage sections, languages, footer, and legal page content."
     }
   }
 }

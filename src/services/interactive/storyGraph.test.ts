@@ -21,7 +21,7 @@ const makeEp = (
   title: `Ep ${num}`,
   titleHi: `एपिसोड ${num}`,
   durationSec: 36,
-  accessTier: 'free',
+  priceCoins: 0,
   mediaRef: { provider: 'demo', id: `audio-${id}`, type: 'audio' },
   publishedAt: '2026-11-20T00:00:00Z',
   ...opts,

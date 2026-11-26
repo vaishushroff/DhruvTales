@@ -3,13 +3,21 @@ import {
   doc,
   getDoc,
   getDocs,
+  limit,
+  orderBy,
   query,
   serverTimestamp,
+  startAfter,
   Timestamp,
   where,
   writeBatch,
+  type DocumentData,
+  type QueryDocumentSnapshot,
 } from 'firebase/firestore';
 import type { Category, Creator, Episode, Story } from '../../types';
+import { getSafeErrorMessage } from '../../utils/validation';
+import { DEFAULT_ECONOMY_SETTINGS } from '../access/episodeAccess';
+import { DEFAULT_COIN_PACKAGES } from '../payments/PaymentProvider';
 import { db, handleFirestoreError, OperationType } from './config';
 import {
   SEED_CATEGORIES,
@@ -18,12 +26,26 @@ import {
   SEED_STORIES,
 } from './seedData';
 
+export const CATALOG_QUERY_LIMITS = {
+  categories: 50,
+  creators: 100,
+  stories: 60,
+  episodes: 360,
+} as const;
+
 export interface CatalogBundle {
   categories: Category[];
   creators: Creator[];
   stories: Story[];
   episodes: Episode[];
   source: 'firestore' | 'seed-fallback';
+  error?: string;
+}
+
+export interface PaginatedStoriesResult {
+  stories: Story[];
+  lastCursor: QueryDocumentSnapshot<DocumentData> | null;
+  hasMore: boolean;
 }
 
 function timestampToIso(val: unknown, fallback: string): string {
@@ -45,10 +67,34 @@ function timestampToIso(val: unknown, fallback: string): string {
 export async function fetchCatalog(): Promise<CatalogBundle> {
   try {
     const [catSnap, creatorSnap, storySnap, epSnap] = await Promise.all([
-      getDocs(query(collection(db, 'categories'), where('isActive', '==', true))),
-      getDocs(query(collection(db, 'creators'), where('followersCount', '>=', 0))),
-      getDocs(query(collection(db, 'stories'), where('visibility', '==', 'published'))),
-      getDocs(query(collection(db, 'episodes'), where('episodeNumber', '>=', 1))),
+      getDocs(
+        query(
+          collection(db, 'categories'),
+          where('isActive', '==', true),
+          limit(CATALOG_QUERY_LIMITS.categories)
+        )
+      ),
+      getDocs(
+        query(
+          collection(db, 'creators'),
+          where('followersCount', '>=', 0),
+          limit(CATALOG_QUERY_LIMITS.creators)
+        )
+      ),
+      getDocs(
+        query(
+          collection(db, 'stories'),
+          where('visibility', '==', 'published'),
+          limit(CATALOG_QUERY_LIMITS.stories)
+        )
+      ),
+      getDocs(
+        query(
+          collection(db, 'episodes'),
+          where('episodeNumber', '>=', 1),
+          limit(CATALOG_QUERY_LIMITS.episodes)
+        )
+      ),
     ]);
 
     if (storySnap.empty) {
@@ -70,53 +116,90 @@ export async function fetchCatalog(): Promise<CatalogBundle> {
     const seedStoriesById = new Map(SEED_STORIES.map((s) => [s.id, s]));
     const seedEpisodesById = new Map(SEED_EPISODES.map((e) => [e.id, e]));
 
-    const stories: Story[] = storySnap.docs.map((d) => {
-      const raw = d.data() as Story;
-      const seedMatch = seedStoriesById.get(raw.id);
-      const base: Story = {
-        ...raw,
-        publishedAt: timestampToIso(raw.publishedAt, new Date().toISOString()),
-        createdAt: timestampToIso(raw.createdAt, new Date().toISOString()),
-        updatedAt: timestampToIso(raw.updatedAt, new Date().toISOString()),
-      };
-      if (seedMatch?.isInteractive) {
-        return {
-          ...base,
-          format: seedMatch.format,
-          isInteractive: true,
-          episodeCount: Math.max(base.episodeCount, seedMatch.episodeCount),
+    const stories: Story[] = storySnap.docs
+      .filter((d) => d.data().isDeleted !== true)
+      .map((d) => {
+        const raw = d.data() as Story;
+        const seedMatch = seedStoriesById.get(raw.id);
+        const base: Story = {
+          ...raw,
+          publishedAt: timestampToIso(raw.publishedAt, new Date().toISOString()),
+          createdAt: timestampToIso(raw.createdAt, new Date().toISOString()),
+          updatedAt: timestampToIso(raw.updatedAt, new Date().toISOString()),
         };
-      }
-      return base;
-    });
+        if (seedMatch?.isInteractive) {
+          const isLegacyStory = !base.isInteractive;
+          return {
+            ...base,
+            synopsis: isLegacyStory ? seedMatch.synopsis : base.synopsis,
+            synopsisHi: isLegacyStory ? seedMatch.synopsisHi : base.synopsisHi,
+            format: seedMatch.format,
+            isInteractive: true,
+            episodeCount: Math.max(base.episodeCount, seedMatch.episodeCount),
+          };
+        }
+        return base;
+      });
 
+    const activeStoryIds = new Set(stories.map((s) => s.id));
     const firestoreEpisodeIds = new Set<string>();
-    const episodes: Episode[] = epSnap.docs.map((d) => {
-      const raw = d.data() as Episode;
-      firestoreEpisodeIds.add(raw.id);
-      const seedMatch = seedEpisodesById.get(raw.id);
-      const base: Episode = {
-        ...raw,
-        publishedAt: timestampToIso(raw.publishedAt, new Date().toISOString()),
-        createdAt: timestampToIso(raw.createdAt, new Date().toISOString()),
-      };
-      if (seedMatch && (seedMatch.choicePoint || seedMatch.isEnding || seedMatch.videoMediaRef)) {
-        return {
-          ...base,
-          accessTier: seedMatch.accessTier,
-          durationSec: base.choicePoint ? base.durationSec : seedMatch.durationSec,
-          audioRef: base.audioRef ?? seedMatch.audioRef,
-          videoMediaRef: base.videoMediaRef ?? seedMatch.videoMediaRef,
-          choicePoint: base.choicePoint ?? seedMatch.choicePoint,
-          isEnding: base.isEnding ?? seedMatch.isEnding,
+    const episodes: Episode[] = epSnap.docs
+      .filter((d) => {
+        const raw = d.data();
+        if (raw.isDeleted === true) return false;
+        if (typeof raw.storyId === 'string' && !activeStoryIds.has(raw.storyId)) return false;
+        return true;
+      })
+      .map((d) => {
+        const raw = d.data() as Episode & { accessTier?: string };
+        firestoreEpisodeIds.add(raw.id);
+        const seedMatch = seedEpisodesById.get(raw.id);
+        const resolvedPriceCoins =
+          typeof raw.priceCoins === 'number' && Number.isFinite(raw.priceCoins) && raw.priceCoins >= 0
+            ? Math.floor(raw.priceCoins)
+            : seedMatch
+              ? seedMatch.priceCoins
+              : raw.accessTier === 'premium'
+                ? 20
+                : raw.accessTier === 'daily_unlock'
+                  ? 10
+                  : 0;
+        const base: Episode = {
+          ...raw,
+          priceCoins: resolvedPriceCoins,
+          publishedAt: timestampToIso(raw.publishedAt, new Date().toISOString()),
+          createdAt: timestampToIso(raw.createdAt, new Date().toISOString()),
         };
-      }
-      return base;
-    });
+        const isInteractiveSeedEpisode = Boolean(
+          seedMatch && seedStoriesById.get(seedMatch.storyId)?.isInteractive
+        );
+        if (seedMatch && (isInteractiveSeedEpisode || seedMatch.choicePoint || seedMatch.isEnding || seedMatch.videoMediaRef)) {
+          const isLegacyInteractiveDoc =
+            isInteractiveSeedEpisode && !base.choicePoint && !base.isEnding && !base.videoMediaRef;
+          return {
+            ...base,
+            title: isLegacyInteractiveDoc ? seedMatch.title : base.title,
+            titleHi: isLegacyInteractiveDoc ? seedMatch.titleHi : base.titleHi,
+            description: isLegacyInteractiveDoc ? seedMatch.description : base.description,
+            descriptionHi: isLegacyInteractiveDoc ? seedMatch.descriptionHi : base.descriptionHi,
+            priceCoins: isInteractiveSeedEpisode ? 0 : base.priceCoins,
+            durationSec: base.choicePoint ? base.durationSec : seedMatch.durationSec,
+            audioRef: base.audioRef ?? seedMatch.audioRef,
+            videoMediaRef: base.videoMediaRef ?? seedMatch.videoMediaRef,
+            choicePoint: base.choicePoint ?? seedMatch.choicePoint,
+            isEnding: base.isEnding ?? seedMatch.isEnding,
+          };
+        }
+        return base;
+      });
 
     // Include newly added Phase 3 branching episodes for interactive seed stories if not yet re-seeded in Firestore
     for (const seedEp of SEED_EPISODES) {
-      if (!firestoreEpisodeIds.has(seedEp.id) && seedStoriesById.get(seedEp.storyId)?.isInteractive) {
+      if (
+        !firestoreEpisodeIds.has(seedEp.id) &&
+        activeStoryIds.has(seedEp.storyId) &&
+        seedStoriesById.get(seedEp.storyId)?.isInteractive
+      ) {
         episodes.push(seedEp);
       }
     }
@@ -138,8 +221,49 @@ export async function fetchCatalog(): Promise<CatalogBundle> {
       stories: SEED_STORIES,
       episodes: SEED_EPISODES,
       source: 'seed-fallback',
+      error: getSafeErrorMessage(
+        error,
+        'Cloud catalog temporarily unavailable — showing local seed stories.'
+      ),
     };
   }
+}
+
+/**
+ * Cursor-based paginated Firestore story query for large production catalogs.
+ * Uses composite index `(visibility ASC, totalPlays DESC)` declared in `firestore.indexes.json`.
+ */
+export async function fetchStoriesPage(
+  pageSize = 12,
+  cursor: QueryDocumentSnapshot<DocumentData> | null = null
+): Promise<PaginatedStoriesResult> {
+  const safeSize = Math.max(1, Math.min(50, pageSize));
+  const constraints = [
+    where('visibility', '==', 'published'),
+    orderBy('totalPlays', 'desc'),
+    ...(cursor ? [startAfter(cursor)] : []),
+    limit(safeSize + 1),
+  ];
+  const snap = await getDocs(query(collection(db, 'stories'), ...constraints));
+  const hasMore = snap.docs.length > safeSize;
+  const pageDocs = hasMore ? snap.docs.slice(0, safeSize) : snap.docs;
+  const stories: Story[] = pageDocs
+    .filter((d) => d.data().isDeleted !== true)
+    .map((d) => {
+      const raw = d.data() as Story;
+      return {
+        ...raw,
+        publishedAt: timestampToIso(raw.publishedAt, new Date().toISOString()),
+        createdAt: timestampToIso(raw.createdAt, new Date().toISOString()),
+        updatedAt: timestampToIso(raw.updatedAt, new Date().toISOString()),
+      };
+    });
+
+  return {
+    stories,
+    lastCursor: pageDocs.length > 0 ? pageDocs[pageDocs.length - 1] : null,
+    hasMore,
+  };
 }
 
 export interface SeedResult {
@@ -260,18 +384,23 @@ export async function seedFirestoreCatalog(adminUid: string): Promise<SeedResult
       result.storiesWritten += 1;
     }
 
+    const interactiveSeedStoryIds = new Set(
+      SEED_STORIES.filter((s) => s.isInteractive).map((s) => s.id)
+    );
+
     for (const ep of SEED_EPISODES) {
       const ref = doc(db, 'episodes', ep.id);
       const snap = await getDoc(ref);
       const existingData = snap.exists() ? snap.data() : null;
-      const needsPhase3Upgrade =
+      const needsUpgrade =
         existingData &&
         ((ep.choicePoint && !existingData.choicePoint) ||
           (ep.videoMediaRef && !existingData.videoMediaRef) ||
           (ep.isEnding && !existingData.isEnding) ||
-          existingData.accessTier !== ep.accessTier);
+          (interactiveSeedStoryIds.has(ep.storyId) && existingData.title !== ep.title) ||
+          typeof existingData.priceCoins !== 'number');
 
-      if (existingData && !needsPhase3Upgrade) {
+      if (existingData && !needsUpgrade) {
         result.skippedExisting += 1;
         continue;
       }
@@ -286,8 +415,7 @@ export async function seedFirestoreCatalog(adminUid: string): Promise<SeedResult
         description: ep.description ?? '',
         descriptionHi: ep.descriptionHi ?? '',
         durationSec: ep.durationSec,
-        accessTier: ep.accessTier,
-        dailyUnlockOrder: ep.dailyUnlockOrder ?? 0,
+        priceCoins: typeof existingData?.priceCoins === 'number' ? existingData.priceCoins : ep.priceCoins,
         mediaRef: ep.mediaRef,
         publishedAt: Timestamp.fromDate(new Date(ep.publishedAt)),
         createdAt: existingData?.createdAt ?? serverTimestamp(),
@@ -306,6 +434,39 @@ export async function seedFirestoreCatalog(adminUid: string): Promise<SeedResult
       }
       batch.set(ref, payload);
       result.episodesWritten += 1;
+    }
+
+    // Seed default admin-defined coin packages if missing
+    for (const pkg of DEFAULT_COIN_PACKAGES) {
+      const pkgRef = doc(db, 'coinPackages', pkg.id);
+      const pkgSnap = await getDoc(pkgRef);
+      if (!pkgSnap.exists()) {
+        batch.set(pkgRef, {
+          id: pkg.id,
+          name: pkg.name,
+          nameHi: pkg.nameHi ?? pkg.name,
+          coins: pkg.coins,
+          bonusCoins: pkg.bonusCoins,
+          priceInr: pkg.priceInr,
+          active: pkg.active,
+          sortOrder: pkg.sortOrder,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+    }
+
+    // Seed platformSettings/economy if missing
+    const ecoRef = doc(db, 'platformSettings', 'economy');
+    const ecoSnap = await getDoc(ecoRef);
+    if (!ecoSnap.exists()) {
+      batch.set(ecoRef, {
+        id: 'economy',
+        dailyFreeEnabled: DEFAULT_ECONOMY_SETTINGS.dailyFreeEnabled,
+        dailyFreeLimit: DEFAULT_ECONOMY_SETTINGS.dailyFreeLimit,
+        updatedByUid: adminUid,
+        updatedAt: serverTimestamp(),
+      });
     }
 
     await batch.commit();

@@ -4,11 +4,9 @@ import {
   ArrowLeft,
   Bookmark,
   Check,
-  Crown,
+  Coins,
   Film,
   Heart,
-  KeyRound,
-  Lock,
   Pause,
   Play,
   Sparkles,
@@ -16,6 +14,7 @@ import {
   UserCheck,
   UserPlus,
 } from 'lucide-react';
+import { EpisodeUnlockModal } from '../components/EpisodeUnlockModal';
 import { StoryArtwork } from '../components/StoryArtwork';
 import { StoryConstellation } from '../components/StoryConstellation';
 import { useAudioPlayer } from '../hooks/useAudioPlayer';
@@ -23,10 +22,10 @@ import { useAppData } from '../hooks/useAuthAndActivity';
 import { useLanguage } from '../hooks/useLanguage';
 import {
   canAccessEpisode,
-  DAILY_FREE_UNLOCK_LIMIT,
   formatDuration,
   formatPlayCount,
   getRemainingDailyUnlocks,
+  resolveEffectiveEpisodePrice,
 } from '../services/access/episodeAccess';
 import { getEpisodeFormats } from '../services/interactive/storyGraph';
 import type { Episode } from '../types';
@@ -44,9 +43,13 @@ export const StoryDetailsPage: React.FC = () => {
     history,
     dailyUnlocks,
     userChoices,
+    wallet,
+    episodeUnlocks,
+    economySettings,
     toggleBookmark,
     isBookmarked,
     claimDailyUnlock,
+    unlockEpisodeWithCoins,
   } = useAppData();
   const {
     currentEpisode,
@@ -60,7 +63,7 @@ export const StoryDetailsPage: React.FC = () => {
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'info' | 'warn'; text: string } | null>(
     null
   );
-  const [unlockingId, setUnlockingId] = useState<string | null>(null);
+  const [unlockModalEpisode, setUnlockModalEpisode] = useState<Episode | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const story = useMemo(() => stories.find((s) => s.id === storyId) ?? null, [stories, storyId]);
@@ -88,8 +91,8 @@ export const StoryDetailsPage: React.FC = () => {
   }, [history, story]);
 
   const remainingDaily = useMemo(
-    () => getRemainingDailyUnlocks(dailyUnlocks),
-    [dailyUnlocks]
+    () => getRemainingDailyUnlocks(dailyUnlocks, economySettings),
+    [dailyUnlocks, economySettings]
   );
 
   if (catalogLoading && !story) {
@@ -140,16 +143,6 @@ export const StoryDetailsPage: React.FC = () => {
         ? t('common.english')
         : t('common.bilingual');
 
-  const handlePrimaryPlay = () => {
-    const targetEp =
-      (latestStoryProgress &&
-        storyEpisodes.find((e) => e.id === latestStoryProgress.episodeId)) ||
-      storyEpisodes[0];
-    if (targetEp) {
-      void playEpisode(story, targetEp);
-    }
-  };
-
   const handleEpisodeClick = async (ep: Episode) => {
     setFeedbackMsg(null);
     if (currentEpisode?.id === ep.id) {
@@ -157,38 +150,29 @@ export const StoryDetailsPage: React.FC = () => {
       return;
     }
 
-    const access = canAccessEpisode(profile, ep, { dailyUnlocks });
+    const access = canAccessEpisode(profile, ep, {
+      story,
+      episodeUnlocks,
+      dailyUnlocks,
+      economySettings,
+    });
     if (access.allowed) {
       await playEpisode(story, ep);
       return;
     }
 
-    if (
-      access.reason === 'eligible_for_daily_unlock' ||
-      access.reason === 'requires_sign_in_for_daily_unlock'
-    ) {
-      setUnlockingId(ep.id);
-      try {
-        const unlockedEntry = await claimDailyUnlock(story.id, ep.id);
-        setFeedbackMsg({ type: 'info', text: t('story.unlockSuccess') });
-        await playEpisode(story, ep, undefined, unlockedEntry);
-      } catch (err) {
-        setFeedbackMsg({
-          type: 'warn',
-          text: err instanceof Error ? err.message : t('story.signInToUnlock'),
-        });
-      } finally {
-        setUnlockingId(null);
-      }
-      return;
-    }
+    // Paid locked episode — open transparent Coin Unlock dialog
+    setUnlockModalEpisode(ep);
+  };
 
-    if (access.reason === 'daily_limit_reached') {
-      setFeedbackMsg({ type: 'warn', text: t('story.dailyLimitReached') });
-      return;
+  const handlePrimaryPlay = () => {
+    const targetEp =
+      (latestStoryProgress &&
+        storyEpisodes.find((e) => e.id === latestStoryProgress.episodeId)) ||
+      storyEpisodes[0];
+    if (targetEp) {
+      void handleEpisodeClick(targetEp);
     }
-
-    setFeedbackMsg({ type: 'warn', text: t('story.premiumRequiredBody') });
   };
 
   const handleLocalMediaSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -203,7 +187,7 @@ export const StoryDetailsPage: React.FC = () => {
       {/* Back navigation */}
       <Link
         to="/"
-        className="inline-flex items-center gap-2 text-xs font-medium text-[#A39E93] hover:text-[#F5F3EE] transition-colors"
+        className="min-h-[44px] inline-flex items-center gap-2 text-xs font-medium text-[#A39E93] hover:text-[#F5F3EE] transition-colors"
       >
         <ArrowLeft className="w-4 h-4" aria-hidden="true" />
         {t('common.back')}
@@ -219,13 +203,13 @@ export const StoryDetailsPage: React.FC = () => {
           {/* Quiet editorial metadata */}
           <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-[#E5A93C] tabular-nums">
             <span>{genreLabel}</span>
-            <span aria-hidden="true" className="text-[#78736A]">·</span>
+            <span aria-hidden="true" className="text-[#9B968B]">·</span>
             <span className="text-[#A39E93]">{langLabel}</span>
-            <span aria-hidden="true" className="text-[#78736A]">·</span>
+            <span aria-hidden="true" className="text-[#9B968B]">·</span>
             <span className="text-[#A39E93]">
               {story.episodeCount} {t('common.episodes')}
             </span>
-            <span aria-hidden="true" className="text-[#78736A]">·</span>
+            <span aria-hidden="true" className="text-[#9B968B]">·</span>
             <span className="text-[#A39E93]">
               ★ {story.rating.toFixed(1)} ({formatPlayCount(story.totalPlays)} {t('common.plays')})
             </span>
@@ -239,7 +223,7 @@ export const StoryDetailsPage: React.FC = () => {
           <div className="flex flex-wrap items-center justify-between gap-4 py-3 border-y border-white/[0.08]">
             <div>
               <p className="text-sm font-semibold text-[#F5F3EE]">{story.creatorName}</p>
-              <p className="text-xs text-[#8A857B]">
+              <p className="text-xs text-[#9B968B]">
                 {creator?.handle ?? '@dhruvtales'} ·{' '}
                 {creator ? formatPlayCount(creator.followersCount) : '10K'} followers
               </p>
@@ -248,7 +232,7 @@ export const StoryDetailsPage: React.FC = () => {
               type="button"
               onClick={() => void toggleBookmark('creator_follow', story.creatorId)}
               aria-pressed={followingCreator}
-              className={`min-h-[40px] px-4 rounded-xl text-xs font-semibold inline-flex items-center gap-2 transition-colors whitespace-nowrap ${
+              className={`min-h-[44px] px-4 rounded-xl text-xs font-semibold inline-flex items-center gap-2 transition-colors whitespace-nowrap ${
                 followingCreator
                   ? 'bg-[#25252E] text-[#F5F3EE] border border-[#E5A93C]/40'
                   : 'bg-[#141418] text-[#F5F3EE] border border-white/15 hover:border-[#E5A93C]/50'
@@ -317,7 +301,7 @@ export const StoryDetailsPage: React.FC = () => {
             <p className="text-sm sm:text-base text-[#D6D2C9] leading-relaxed max-w-2xl">
               {synopsis}
             </p>
-            <p className="text-xs text-[#8A857B] pt-1">
+            <p className="text-xs text-[#9B968B] pt-1">
               {story.format === 'hybrid' ? t('common.hybridFormat') : t('common.audioOnly')}
               {story.isInteractive ? ` · ${t('common.interactiveReady')}` : ''}
             </p>
@@ -350,10 +334,10 @@ export const StoryDetailsPage: React.FC = () => {
           <span>{feedbackMsg.text}</span>
           {feedbackMsg.type === 'warn' && (
             <Link
-              to="/profile"
+              to="/wallet"
               className="font-semibold text-[#E5A93C] hover:underline whitespace-nowrap"
             >
-              Go to Profile →
+              {t('wallet.openWalletCta')} →
             </Link>
           )}
         </div>
@@ -362,21 +346,38 @@ export const StoryDetailsPage: React.FC = () => {
       {/* Episode List */}
       <section className="space-y-4">
         <div className="flex flex-wrap items-end justify-between gap-4 border-b border-white/[0.08] pb-3">
-          <h2 className="font-display text-2xl font-semibold text-[#F5F3EE]">
-            {t('story.episodesHeading')} ({storyEpisodes.length})
-          </h2>
-          <p className="text-xs text-[#A39E93] tabular-nums">
-            {t('story.dailyUnlockQuota')}:{' '}
-            <strong className="text-[#E5A93C]">
-              {remainingDaily}/{DAILY_FREE_UNLOCK_LIMIT}
-            </strong>{' '}
-            {t('story.dailyUnlockRemaining')}
-          </p>
+          <div className="space-y-1">
+            <h2 className="font-display text-2xl font-semibold text-[#F5F3EE]">
+              {t('story.episodesHeading')} ({storyEpisodes.length})
+            </h2>
+            {typeof story.priceOverrideCoins === 'number' && (
+              <p className="text-xs text-[#E5A93C]">
+                {t('story.storyPriceOverrideBanner', {
+                  price: String(story.priceOverrideCoins),
+                })}
+              </p>
+            )}
+          </div>
+          {economySettings.dailyFreeEnabled && economySettings.dailyFreeLimit > 0 && (
+            <p className="text-xs text-[#A39E93] tabular-nums">
+              {t('story.dailyUnlockQuota')}:{' '}
+              <strong className="text-[#E5A93C]">
+                {remainingDaily}/{economySettings.dailyFreeLimit}
+              </strong>{' '}
+              {t('story.dailyUnlockRemaining')}
+            </p>
+          )}
         </div>
 
         <div className="divide-y divide-white/[0.06] rounded-2xl bg-[#141418] border border-white/[0.08] overflow-hidden">
           {storyEpisodes.map((ep) => {
-            const access = canAccessEpisode(profile, ep, { dailyUnlocks });
+            const effectivePrice = resolveEffectiveEpisodePrice(ep, story);
+            const access = canAccessEpisode(profile, ep, {
+              story,
+              episodeUnlocks,
+              dailyUnlocks,
+              economySettings,
+            });
             const epProgress = history.find((h) => h.episodeId === ep.id);
             const epFormats = getEpisodeFormats(ep);
             const pct =
@@ -395,7 +396,7 @@ export const StoryDetailsPage: React.FC = () => {
                 }`}
               >
                 <div className="flex items-start gap-4 min-w-0 flex-1">
-                  <span className="font-mono-tabular text-xs text-[#78736A] pt-1 w-6 shrink-0">
+                  <span className="font-mono-tabular text-xs text-[#9B968B] pt-1 w-6 shrink-0">
                     {String(ep.episodeNumber).padStart(2, '0')}
                   </span>
 
@@ -412,11 +413,17 @@ export const StoryDetailsPage: React.FC = () => {
                     )}
 
                     {/* Clean unboxed episode metadata */}
-                    <div className="flex flex-wrap items-center gap-2 text-[11px] text-[#8A857B] tabular-nums pt-0.5">
+                    <div className="flex flex-wrap items-center gap-2 text-[11px] text-[#9B968B] tabular-nums pt-0.5">
                       <span className="font-mono-tabular">{formatDuration(ep.durationSec)}</span>
                       <span aria-hidden="true">·</span>
                       {access.reason === 'free_episode' && (
                         <span className="text-emerald-400">{t('common.free')}</span>
+                      )}
+                      {access.reason === 'coin_unlocked' && (
+                        <span className="text-[#6BAE8E] inline-flex items-center gap-1">
+                          <Check className="w-3 h-3" aria-hidden="true" />
+                          {t('story.unlockedPermanently')}
+                        </span>
                       )}
                       {access.reason === 'daily_unlock_claimed' && (
                         <span className="text-[#E5A93C] inline-flex items-center gap-1">
@@ -424,25 +431,13 @@ export const StoryDetailsPage: React.FC = () => {
                           {t('common.unlocked')}
                         </span>
                       )}
-                      {access.reason === 'premium_subscription' && (
-                        <span className="text-[#E5A93C] inline-flex items-center gap-1">
-                          <Crown className="w-3 h-3" aria-hidden="true" />
-                          {t('common.premium')}
-                        </span>
-                      )}
                       {access.reason === 'admin_or_creator_owner' && (
                         <span className="text-[#E5A93C]">{t('common.unlocked')}</span>
                       )}
-                      {!access.allowed && ep.accessTier === 'daily_unlock' && (
-                        <span className="text-[#E5A93C] inline-flex items-center gap-1">
-                          <KeyRound className="w-3 h-3" aria-hidden="true" />
-                          {t('common.dailyFree')}
-                        </span>
-                      )}
-                      {!access.allowed && ep.accessTier === 'premium' && (
-                        <span className="text-[#A39E93] inline-flex items-center gap-1">
-                          <Lock className="w-3 h-3" aria-hidden="true" />
-                          {t('common.premium')}
+                      {!access.allowed && (
+                        <span className="text-[#F3C669] inline-flex items-center gap-1 tabular-nums">
+                          <Coins className="w-3 h-3 text-[#E5A93C]" aria-hidden="true" />
+                          {effectivePrice} {t('coins.unit')}
                         </span>
                       )}
 
@@ -496,13 +491,14 @@ export const StoryDetailsPage: React.FC = () => {
                   {access.allowed ? (
                     <button
                       type="button"
+                      data-testid={`episode-play-btn-${ep.episodeNumber}`}
                       onClick={() => void handleEpisodeClick(ep)}
                       aria-label={
                         isActive && isPlaying
                           ? `Pause Episode ${ep.episodeNumber}`
                           : `Play Episode ${ep.episodeNumber}`
                       }
-                      className={`min-h-[42px] px-4 rounded-xl text-xs font-semibold inline-flex items-center gap-2 transition-colors whitespace-nowrap ${
+                      className={`min-h-[44px] px-4 rounded-xl text-xs font-semibold inline-flex items-center gap-2 transition-colors whitespace-nowrap ${
                         isActive
                           ? 'bg-[#E5A93C] text-[#0B0B0E]'
                           : 'bg-[#1C1C22] border border-white/10 text-[#F5F3EE] hover:border-[#E5A93C]/50'
@@ -520,24 +516,15 @@ export const StoryDetailsPage: React.FC = () => {
                         </>
                       )}
                     </button>
-                  ) : access.canUnlockToday ? (
-                    <button
-                      type="button"
-                      disabled={unlockingId === ep.id}
-                      onClick={() => void handleEpisodeClick(ep)}
-                      className="min-h-[42px] px-4 rounded-xl bg-[#E5A93C]/15 border border-[#E5A93C]/45 text-[#F3C669] hover:bg-[#E5A93C] hover:text-[#0B0B0E] text-xs font-semibold inline-flex items-center gap-2 transition-colors whitespace-nowrap"
-                    >
-                      <KeyRound className="w-3.5 h-3.5" aria-hidden="true" />
-                      {t('story.unlockToday')}
-                    </button>
                   ) : (
                     <button
                       type="button"
+                      data-testid={`episode-unlock-btn-${ep.episodeNumber}`}
                       onClick={() => void handleEpisodeClick(ep)}
-                      className="min-h-[42px] px-4 rounded-xl bg-[#1C1C22] border border-white/10 text-[#A39E93] hover:text-[#F5F3EE] text-xs font-medium inline-flex items-center gap-2 transition-colors whitespace-nowrap"
+                      className="min-h-[44px] px-4 rounded-xl bg-[#E5A93C]/15 border border-[#E5A93C]/45 text-[#F3C669] hover:bg-[#E5A93C] hover:text-[#0B0B0E] text-xs font-semibold inline-flex items-center gap-2 transition-colors whitespace-nowrap tabular-nums"
                     >
-                      <Lock className="w-3.5 h-3.5" aria-hidden="true" />
-                      {ep.accessTier === 'premium' ? t('common.premium') : t('common.locked')}
+                      <Coins className="w-3.5 h-3.5" aria-hidden="true" />
+                      {effectivePrice} {t('coins.unit')}
                     </button>
                   )}
                 </div>
@@ -565,13 +552,53 @@ export const StoryDetailsPage: React.FC = () => {
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="min-h-[40px] px-4 rounded-xl bg-[#1C1C22] border border-white/15 text-xs font-medium text-[#F5F3EE] hover:border-[#E5A93C]/50 inline-flex items-center gap-2 whitespace-nowrap transition-colors"
+            className="min-h-[44px] px-4 rounded-xl bg-[#1C1C22] border border-white/15 text-xs font-medium text-[#F5F3EE] hover:border-[#E5A93C]/50 inline-flex items-center gap-2 whitespace-nowrap transition-colors"
           >
             <Upload className="w-3.5 h-3.5 text-[#E5A93C]" aria-hidden="true" />
             {t('story.loadLocalMedia')}
           </button>
         </div>
       </section>
+
+      {/* Coin Unlock Modal */}
+      {unlockModalEpisode && (
+        <EpisodeUnlockModal
+          story={story}
+          episode={unlockModalEpisode}
+          walletBalance={wallet.balance}
+          dailyFreeEnabled={economySettings.dailyFreeEnabled}
+          remainingDailyFree={remainingDaily}
+          dailyFreeLimit={economySettings.dailyFreeLimit}
+          onUnlockWithCoins={async () => {
+            const target = unlockModalEpisode;
+            const res = await unlockEpisodeWithCoins(target, story);
+            if (res.unlocked) {
+              setUnlockModalEpisode(null);
+              setFeedbackMsg({
+                type: 'info',
+                text: res.alreadyUnlocked
+                  ? t('story.alreadyUnlockedInfo')
+                  : t('story.coinUnlockSuccess', { price: String(res.effectivePrice) }),
+              });
+              await playEpisode(story, target, undefined, undefined, undefined, res.unlock);
+              return { ok: true };
+            }
+            return {
+              ok: false,
+              error: res.error,
+              insufficientBalance: res.insufficientBalance,
+            };
+          }}
+          onUseDailyFree={async () => {
+            const target = unlockModalEpisode;
+            const unlockedEntry = await claimDailyUnlock(story.id, target.id);
+            setUnlockModalEpisode(null);
+            setFeedbackMsg({ type: 'info', text: t('story.unlockSuccess') });
+            await playEpisode(story, target, undefined, unlockedEntry);
+          }}
+          onClose={() => setUnlockModalEpisode(null)}
+        />
+      )}
     </div>
   );
 };

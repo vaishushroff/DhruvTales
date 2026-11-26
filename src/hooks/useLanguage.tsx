@@ -1,12 +1,17 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { resolveTranslation } from '../i18n';
+import {
+  isSupportedLanguage,
+  resolveTranslation,
+  SUPPORTED_LANGUAGES,
+} from '../i18n';
 import type { LanguageCode } from '../types';
 
 interface LanguageContextValue {
   lang: LanguageCode;
+  supportedLanguages: typeof SUPPORTED_LANGUAGES;
   setLang: (lang: LanguageCode) => void;
   toggleLang: () => void;
-  t: (path: string) => string;
+  t: (path: string, params?: Record<string, string | number>) => string;
 }
 
 const STORAGE_KEY = 'dhruv_tales_lang';
@@ -17,7 +22,7 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [lang, setLangState] = useState<LanguageCode>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved === 'hi' || saved === 'en') return saved;
+      if (isSupportedLanguage(saved)) return saved;
     } catch {
       // Ignore storage access restrictions
     }
@@ -34,17 +39,29 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   }, [lang]);
 
   const setLang = useCallback((next: LanguageCode) => {
-    setLangState(next);
+    if (isSupportedLanguage(next)) {
+      setLangState(next);
+    }
   }, []);
 
   const toggleLang = useCallback(() => {
-    setLangState((prev) => (prev === 'en' ? 'hi' : 'en'));
+    setLangState((prev) => {
+      const idx = SUPPORTED_LANGUAGES.findIndex((l) => l.code === prev);
+      const nextIdx = (idx + 1) % SUPPORTED_LANGUAGES.length;
+      return SUPPORTED_LANGUAGES[nextIdx]?.code ?? 'en';
+    });
   }, []);
 
-  const t = useCallback((path: string) => resolveTranslation(lang, path), [lang]);
+  const t = useCallback(
+    (path: string, params?: Record<string, string | number>) =>
+      resolveTranslation(lang, path, params),
+    [lang]
+  );
 
   return (
-    <LanguageContext.Provider value={{ lang, setLang, toggleLang, t }}>
+    <LanguageContext.Provider
+      value={{ lang, supportedLanguages: SUPPORTED_LANGUAGES, setLang, toggleLang, t }}
+    >
       {children}
     </LanguageContext.Provider>
   );
