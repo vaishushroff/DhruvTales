@@ -131,7 +131,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     const effectivePrice = resolveEffectiveEpisodePrice(episode, story);
 
     // 5. Load user profile, permanent episodeUnlock, and dailyUnlocks when authenticated
-    let userProfile = null;
+    let userProfile: ReturnType<typeof mapFirestoreUserProfile> = null;
     let episodeUnlocks: ReturnType<typeof mapFirestoreEpisodeUnlock>[] = [];
     let dailyUnlocks: ReturnType<typeof mapFirestoreDailyUnlock>[] = [];
 

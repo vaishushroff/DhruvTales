@@ -98,8 +98,8 @@ export default defineConfig(() => {
           if (error) {
             return;
           }
-          const distDir = path.resolve(__dirname, 'dist');
-          const srcAssets = path.resolve(__dirname, 'src/assets');
+          const distDir = path.resolve(import.meta.dirname, 'dist');
+          const srcAssets = path.resolve(import.meta.dirname, 'src/assets');
           const distAssets = path.resolve(distDir, 'src/assets');
           if (fs.existsSync(distDir) && fs.existsSync(srcAssets)) {
             fs.cpSync(srcAssets, distAssets, {recursive: true, force: true});
@@ -107,10 +107,45 @@ export default defineConfig(() => {
         },
       },
     ],
+    build: {
+      rolldownOptions: {
+        output: {
+          codeSplitting: {
+            groups: [
+              {
+                name: 'firebase-firestore',
+                test: /node_modules[\\/](@firebase[\\/]firestore|firebase[\\/]firestore)/,
+                priority: 30,
+              },
+              {
+                name: 'firebase-auth',
+                test: /node_modules[\\/](@firebase[\\/]auth|firebase[\\/]auth)/,
+                priority: 25,
+              },
+              {
+                name: 'firebase-core',
+                test: /node_modules[\\/](@firebase|firebase)/,
+                priority: 20,
+              },
+              {
+                name: 'motion',
+                test: /node_modules[\\/](motion|framer-motion)/,
+                priority: 15,
+              },
+              {
+                name: 'react-vendor',
+                test: /node_modules[\\/](react|react-dom|react-router|react-router-dom|scheduler)/,
+                priority: 10,
+              },
+            ],
+          },
+        },
+      },
+    },
     resolve: {
       dedupe: ['react', 'react-dom'],
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        '@': path.resolve(import.meta.dirname, '.'),
       },
     },
     optimizeDeps: {
