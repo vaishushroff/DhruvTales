@@ -2,7 +2,8 @@ import crypto from 'node:crypto';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { FieldValue } from 'firebase-admin/firestore';
 import type { AuditActionType, ContentLanguage, CoverTheme, StoryFormat, StoryVisibility } from '../../src/types';
-import { sanitizeSafeUrl, sanitizeSiteSettings } from '../../src/services/siteSettings/siteSettingsService';
+import { sanitizeSafeUrl, sanitizeSiteSettings } from '../../src/services/siteSettings/siteSettingsPure';
+import { applyCorsHeaders } from '../_lib/cors';
 import {
   AuthVerificationError,
   getAdminDb,
@@ -70,6 +71,7 @@ function buildAuditEntry(
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
+  if (applyCorsHeaders(req, res)) return;
   res.setHeader('Cache-Control', 'private, no-store');
 
   if (req.method !== 'POST') {

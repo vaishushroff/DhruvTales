@@ -45,6 +45,7 @@ import {
   saveCachedSiteSettings,
 } from '../siteSettings/siteSettingsService';
 import { slugify } from '../studio/studioAnalytics';
+import { resolveApiUrl } from '../api/apiClient';
 import { writeAuditLog } from './adminService';
 import { db, handleFirestoreError, OperationType } from './config';
 
@@ -75,14 +76,14 @@ async function tryServerCmsApi(
   if (!user) return { ok: false, fallbackAllowed: false, error: 'Authentication required.' };
   try {
     const headers = await getBearerHeaders(user);
-    const res = await fetch('/api/admin/cms', {
+    const res = await fetch(resolveApiUrl('/api/admin/cms'), {
       method: 'POST',
       headers,
       body: JSON.stringify({ action, payload }),
     });
     const contentType = res.headers.get('content-type') ?? '';
     if (!contentType.includes('application/json')) {
-      // Local Vite dev server does not run Vercel /api routes
+      // Static-only host without a connected backend API
       return { ok: false, fallbackAllowed: true };
     }
     const data = (await res.json()) as Record<string, unknown>;
@@ -659,7 +660,7 @@ export async function fetchAdminAnalyticsReport(
       if (params.preset === 'custom' && params.from) qs.set('from', params.from);
       if (params.preset === 'custom' && params.to) qs.set('to', params.to);
       const headers = await getBearerHeaders(user);
-      const res = await fetch(`/api/admin/analytics?${qs.toString()}`, {
+      const res = await fetch(resolveApiUrl(`/api/admin/analytics?${qs.toString()}`), {
         method: 'GET',
         headers,
       });
@@ -754,7 +755,7 @@ export async function fetchPerUserAnalyticsDetail(
       if (params.preset === 'custom' && params.from) qs.set('from', params.from);
       if (params.preset === 'custom' && params.to) qs.set('to', params.to);
       const headers = await getBearerHeaders(user);
-      const res = await fetch(`/api/admin/analytics?${qs.toString()}`, {
+      const res = await fetch(resolveApiUrl(`/api/admin/analytics?${qs.toString()}`), {
         method: 'GET',
         headers,
       });

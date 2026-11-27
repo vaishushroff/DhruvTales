@@ -1,0 +1,11 @@
+node_modules
+dist
+dev-dist
+.git
+.env
+.env.*
+!.env.example
+*.json.key
+*service-account*.json
+.playwright-cli
+docs

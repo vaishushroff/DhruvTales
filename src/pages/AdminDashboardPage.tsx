@@ -326,7 +326,7 @@ export const AdminDashboardPage: React.FC = () => {
       if (!res.usedServerApi) {
         setFeedback({
           type: 'error',
-          text: t('admin.sessionApiUnavailable'),
+          text: res.error || t('admin.sessionApiUnavailable'),
         });
         return;
       }

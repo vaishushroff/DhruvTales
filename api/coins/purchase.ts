@@ -5,6 +5,7 @@ import {
   DEFAULT_COIN_PACKAGES,
   mockPaymentProvider,
 } from '../../src/services/payments/PaymentProvider';
+import { applyCorsHeaders } from '../_lib/cors';
 import {
   computePackagePurchaseMutation,
   createEmptyWallet,
@@ -34,6 +35,7 @@ function parseBody(req: VercelRequest): Record<string, unknown> {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
+  if (applyCorsHeaders(req, res)) return;
   res.setHeader('Cache-Control', 'private, no-store');
 
   if (req.method !== 'POST') {

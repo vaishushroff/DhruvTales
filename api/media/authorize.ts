@@ -4,6 +4,7 @@ import {
   resolveEffectiveEpisodePrice,
 } from '../../src/services/access/episodeAccess';
 import { buildEpisodeUnlockDocId } from '../_lib/coinEngine';
+import { applyCorsHeaders } from '../_lib/cors';
 import {
   AuthVerificationError,
   getAdminDb,
@@ -47,6 +48,7 @@ function parseBody(req: VercelRequest): AuthorizeRequestBody {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
+  if (applyCorsHeaders(req, res)) return;
   res.setHeader('Cache-Control', 'private, no-store');
 
   if (req.method !== 'POST') {

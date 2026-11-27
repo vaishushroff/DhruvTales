@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { DEFAULT_COIN_PACKAGES } from '../../src/services/payments/PaymentProvider';
+import { applyCorsHeaders } from '../_lib/cors';
 import {
   AuthVerificationError,
   getAdminDb,
@@ -15,6 +16,7 @@ import {
 } from '../_lib/firestoreModels';
 
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
+  if (applyCorsHeaders(req, res)) return;
   res.setHeader('Cache-Control', 'private, no-store');
 
   if (req.method !== 'GET') {

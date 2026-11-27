@@ -10,6 +10,7 @@ import {
   verifyFirebaseBearerToken,
 } from '../_lib/firebaseAdmin';
 import { isValidFirestoreDocId, mapFirestoreActiveDevice } from '../_lib/firestoreModels';
+import { applyCorsHeaders } from '../_lib/cors';
 import { evaluateAdminSessionAction } from '../_lib/sessionEngine';
 
 const BOOTSTRAP_ADMIN_EMAIL = 'vaishushroff@gmail.com';
@@ -43,6 +44,7 @@ async function isAdminActor(uid: string, email: string | undefined): Promise<boo
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
+  if (applyCorsHeaders(req, res)) return;
   res.setHeader('Cache-Control', 'private, no-store');
 
   if (req.method !== 'POST') {

@@ -18,6 +18,7 @@ import {
   computePerUserAnalytics,
   resolveDateRangeBounds,
 } from '../_lib/analyticsEngine';
+import { applyCorsHeaders } from '../_lib/cors';
 import {
   AuthVerificationError,
   getAdminDb,
@@ -162,6 +163,7 @@ function mapSessionDoc(id: string, raw: Record<string, unknown>): SessionLogEntr
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
+  if (applyCorsHeaders(req, res)) return;
   res.setHeader('Cache-Control', 'private, no-store');
 
   if (req.method !== 'GET') {

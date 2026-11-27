@@ -28,6 +28,7 @@ import {
   type CoinCheckoutReceipt,
 } from '../payments/PaymentProvider';
 import { db } from '../firebase/config';
+import { buildApiUnavailableMessage, fetchApiJson } from '../api/apiClient';
 
 const LOCAL_DEMO_WALLET_PREFIX = 'dhruv_tales_demo_coin_wallet_v1_';
 
@@ -123,24 +124,6 @@ function saveLocalDemoCoinStore(uid: string, store: LocalDemoCoinStore): void {
   }
 }
 
-async function fetchJsonApi(
-  url: string,
-  options: RequestInit
-): Promise<{ available: boolean; status: number; data: Record<string, unknown> }> {
-  try {
-    const res = await fetch(url, options);
-    const contentType = res.headers.get('content-type') || '';
-    if (!contentType.includes('application/json')) {
-      // Local Vite dev server serves index.html or 404 plain text for /api/*
-      return { available: false, status: res.status, data: {} };
-    }
-    const data = (await res.json()) as Record<string, unknown>;
-    return { available: true, status: res.status, data };
-  } catch {
-    return { available: false, status: 0, data: {} };
-  }
-}
-
 /**
  * Loads public coin packages and economy settings from Firestore (read-only),
  * falling back to defaults when collections are not yet seeded.
@@ -226,7 +209,7 @@ export async function fetchWalletBundle(user: User | null): Promise<WalletBundle
 
   try {
     const idToken = await user.getIdToken();
-    const api = await fetchJsonApi('/api/coins/wallet', {
+    const api = await fetchApiJson('/api/coins/wallet', {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${idToken}`,
@@ -344,7 +327,7 @@ export async function purchaseCoinPackage(
 ): Promise<PurchaseCoinResult> {
   if (user) {
     const idToken = await user.getIdToken();
-    const api = await fetchJsonApi('/api/coins/purchase', {
+    const api = await fetchApiJson('/api/coins/purchase', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -445,7 +428,7 @@ export async function unlockEpisodeWithCoinsApi(
 
   if (user) {
     const idToken = await user.getIdToken();
-    const api = await fetchJsonApi('/api/coins/unlock', {
+    const api = await fetchApiJson('/api/coins/unlock', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -592,7 +575,7 @@ export async function updatePricingViaApi(
     | { target: 'story_override'; storyId: string; priceCoins: number | null }
 ): Promise<{ usedServerApi: boolean }> {
   const idToken = await user.getIdToken();
-  const api = await fetchJsonApi('/api/coins/pricing', {
+  const api = await fetchApiJson('/api/coins/pricing', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -612,7 +595,7 @@ export async function updatePricingViaApi(
 
 /**
  * Calls POST /api/coins/admin-adjust for Admin-only wallet adjustments, bonuses, and refunds.
- * Requires the Vercel serverless API runtime (never mutates wallets from the browser).
+ * Requires the backend API server (never mutates wallets from the browser).
  */
 export async function adminAdjustWalletViaApi(
   user: User,
@@ -626,7 +609,7 @@ export async function adminAdjustWalletViaApi(
   }
 ): Promise<{ wallet: CoinWallet; transaction: CoinTransaction }> {
   const idToken = await user.getIdToken();
-  const api = await fetchJsonApi('/api/coins/admin-adjust', {
+  const api = await fetchApiJson('/api/coins/admin-adjust', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -636,9 +619,7 @@ export async function adminAdjustWalletViaApi(
   });
 
   if (!api.available) {
-    throw new Error(
-      'Server-side /api/coins/admin-adjust is unavailable in local Vite-only preview. Deploy on Vercel with Firebase Admin credentials to adjust production wallets.'
-    );
+    throw new Error(buildApiUnavailableMessage('/api/coins/admin-adjust', api));
   }
   if (api.status !== 200) {
     throw new Error(String(api.data.error ?? 'Failed to adjust user coin wallet.'));

@@ -77,7 +77,7 @@
     "supportBody": "Contact platform support at",
     "returnHomeBtn": "Return to Home",
     "deviceStatusHeading": "Single-Device Session",
-    "activeDeviceNone": "Not registered yet (requires Vercel API)",
+    "activeDeviceNone": "Not registered yet (requires backend API)",
     "warningsCountLabel": "Device Warnings"
   },
   "home": {
@@ -283,7 +283,7 @@
     "returnToStory": "Return to Story",
     "demoNoticeTitle": "Demo payments only — No real money charged",
     "demoNoticeServer": "Coin purchases run through MockPaymentProvider and record atomically in your server-authoritative Firestore wallet and immutable coinTransactions ledger. A real gateway (Razorpay) plugs in later.",
-    "demoNoticeLocal": "Local preview mode: Coin top-ups and unlocks use a browser-local demo ledger (no client Firestore writes). On Vercel with Firebase Admin configured, all wallet mutations run atomically via /api/coins/*.",
+    "demoNoticeLocal": "Local preview mode: Coin top-ups and unlocks use a browser-local demo ledger (no client Firestore writes). When connected to the backend API with Firebase Admin configured, all wallet mutations run atomically via /api/coins/*.",
     "demoOnlyTag": "Demo Payments Only",
     "receiptSuccess": "Credited {coins} coins from {name}!",
     "balanceLabel": "Available Balance",
@@ -522,7 +522,7 @@
     "unbanReasonInputLabel": "Audit Note (optional)",
     "unbanReasonPlaceholder": "e.g., Appeal approved by support",
     "confirmUnbanBtn": "Restore Account",
-    "sessionApiUnavailable": "Server-side /api/session/admin is unavailable in local preview. Deploy on Vercel with Firebase Admin env vars to execute Firebase Auth ban, unban, token revocation, and force-logout actions.",
+    "sessionApiUnavailable": "Server-side /api/session/admin is not reachable or missing Firebase Admin credentials. Run the backend API server with Firebase Admin env vars (and set VITE_API_BASE_URL if using static hosting) to execute ban, unban, token revocation, and force-logout actions.",
     "approveBtn": "Approve",
     "rejectBtn": "Reject",
     "reviewNotePlaceholder": "Optional review note...",

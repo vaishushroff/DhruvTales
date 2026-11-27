@@ -7,7 +7,7 @@ import {
   resolveSectionStories,
   sanitizeSafeUrl,
   sanitizeSiteSettings,
-} from './siteSettingsService';
+} from './siteSettingsPure';
 
 const SAMPLE_STORIES: Story[] = [
   {

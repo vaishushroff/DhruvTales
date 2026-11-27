@@ -77,7 +77,7 @@
     "supportBody": "प्लेटफ़ॉर्म सहायता टीम से संपर्क करें:",
     "returnHomeBtn": "होम पर लौटें",
     "deviceStatusHeading": "सिंगल-डिवाइस सत्र",
-    "activeDeviceNone": "अभी पंजीकृत नहीं (Vercel API आवश्यक)",
+    "activeDeviceNone": "अभी पंजीकृत नहीं (बैकएंड API आवश्यक)",
     "warningsCountLabel": "डिवाइस चेतावनियाँ"
   },
   "home": {
@@ -283,7 +283,7 @@
     "returnToStory": "कहानी पर लौटें",
     "demoNoticeTitle": "केवल डेमो भुगतान — कोई वास्तविक शुल्क नहीं",
     "demoNoticeServer": "कॉइन खरीद MockPaymentProvider द्वारा चलती है और आपके सर्वर-ऑथॉरिटेटिव Firestore वॉलेट व अपरिवर्तनीय coinTransactions लेजर में दर्ज होती है। वास्तविक गेटवे (Razorpay) बाद में जोड़ा जाएगा।",
-    "demoNoticeLocal": "लोकल प्रीव्यू मोड: कॉइन टॉप-अप और अनलॉक ब्राउज़र-लोकल डेमो लेजर में चलते हैं (क्लाइंट से Firestore में कोई लेखन नहीं)। Vercel पर Firebase Admin के साथ सभी बदलाव /api/coins/* से होते हैं।",
+    "demoNoticeLocal": "लोकल प्रीव्यू मोड: कॉइन टॉप-अप और अनलॉक ब्राउज़र-लोकल डेमो लेजर में चलते हैं (क्लाइंट से Firestore में कोई लेखन नहीं)। Firebase Admin के साथ बैकएंड API जुड़ा होने पर सभी बदलाव /api/coins/* से होते हैं।",
     "demoOnlyTag": "केवल डेमो भुगतान",
     "receiptSuccess": "{name} से {coins} कॉइन जोड़े गए!",
     "balanceLabel": "उपलब्ध बैलेंस",
@@ -522,7 +522,7 @@
     "unbanReasonInputLabel": "ऑडिट नोट (वैकल्पिक)",
     "unbanReasonPlaceholder": "जैसे: सपोर्ट समीक्षा के बाद बहाल",
     "confirmUnbanBtn": "खाता बहाल करें",
-    "sessionApiUnavailable": "लोकल प्रीव्यू में सर्वर-साइड /api/session/admin उपलब्ध नहीं है। बैन, अनबैन, टोकन रद्द करने और फ़ोर्स लॉगआउट के लिए Firebase Admin एनवायरनमेंट वेरिएबल के साथ Vercel पर चलाएँ।",
+    "sessionApiUnavailable": "सर्वर-साइड /api/session/admin उपलब्ध नहीं है या Firebase Admin क्रेडेंशियल सेट नहीं हैं। बैन, अनबैन, टोकन रद्द करने और फ़ोर्स लॉगआउट के लिए Firebase Admin एनवायरनमेंट वेरिएबल के साथ बैकएंड API सर्वर चलाएँ (स्टैटिक होस्टिंग पर VITE_API_BASE_URL सेट करें)।",
     "approveBtn": "स्वीकृत करें",
     "rejectBtn": "अस्वीकार करें",
     "reviewNotePlaceholder": "वैकल्पिक समीक्षा टिप्पणी...",

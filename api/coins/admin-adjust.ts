@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { FieldValue } from 'firebase-admin/firestore';
 import type { CoinTransactionType } from '../../src/types';
+import { applyCorsHeaders } from '../_lib/cors';
 import {
   computeAdminWalletAdjustment,
   createEmptyWallet,
@@ -47,6 +48,7 @@ async function isAdminActor(uid: string, email: string | undefined): Promise<boo
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
+  if (applyCorsHeaders(req, res)) return;
   res.setHeader('Cache-Control', 'private, no-store');
 
   if (req.method !== 'POST') {

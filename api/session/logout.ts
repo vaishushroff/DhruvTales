@@ -7,6 +7,7 @@ import {
   ServerConfigError,
   verifyFirebaseBearerToken,
 } from '../_lib/firebaseAdmin';
+import { applyCorsHeaders } from '../_lib/cors';
 import { mapFirestoreActiveDevice } from '../_lib/firestoreModels';
 import { evaluateSessionLogout, sanitizeDeviceId } from '../_lib/sessionEngine';
 
@@ -23,6 +24,7 @@ function parseBody(req: VercelRequest): Record<string, unknown> {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
+  if (applyCorsHeaders(req, res)) return;
   res.setHeader('Cache-Control', 'private, no-store');
 
   if (req.method !== 'POST') {

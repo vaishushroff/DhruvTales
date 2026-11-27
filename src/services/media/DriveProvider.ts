@@ -1,5 +1,6 @@
 import type { Episode, MediaRef, UserProfile } from '../../types';
 import { canAccessEpisode } from '../access/episodeAccess';
+import { resolveApiUrl } from '../api/apiClient';
 import { auth } from '../firebase/config';
 import type {
   MediaPlaybackResolution,
@@ -109,7 +110,7 @@ export function mapDriveApiError(status: number, payload: ApiErrorPayload | null
       'server_not_configured',
       503,
       serverMsg ||
-        'Google Drive media server environment variables are not configured yet on Vercel.'
+        'Google Drive media server environment variables are not configured yet on the backend server.'
     );
   }
   if (code === 'invalid_folder_id') {
@@ -211,7 +212,7 @@ export class DriveMediaProvider implements MediaProvider {
 
     let response: Response;
     try {
-      response = await fetch('/api/media/authorize', {
+      response = await fetch(resolveApiUrl('/api/media/authorize'), {
         method: 'POST',
         headers,
         body: JSON.stringify({
@@ -223,7 +224,7 @@ export class DriveMediaProvider implements MediaProvider {
       throw new DriveMediaError(
         'network_error',
         0,
-        'Could not reach /api/media/authorize. Check your network connection or Vercel serverless deployment.'
+        'Could not reach /api/media/authorize. Check your network connection or backend API server.'
       );
     }
 
@@ -241,7 +242,7 @@ export class DriveMediaProvider implements MediaProvider {
         throw new DriveMediaError(
           'server_not_configured',
           404,
-          'Media authorization API (/api/media/authorize) is unavailable in this environment. Deploy on Vercel or run with `vercel dev`.'
+          'Media authorization API (/api/media/authorize) is unavailable on this host. Configure VITE_API_BASE_URL or run the backend API server.'
         );
       }
       throw mapDriveApiError(response.status, payload);
@@ -256,7 +257,7 @@ export class DriveMediaProvider implements MediaProvider {
     }
 
     return {
-      url: payload.url,
+      url: resolveApiUrl(payload.url),
       expiresAt: typeof payload.expiresAt === 'number' ? payload.expiresAt : undefined,
       mimeType:
         payload.mimeType || (mediaRef.type === 'video' ? 'video/mp4' : 'audio/mpeg'),
@@ -306,7 +307,7 @@ export async function importEpisodesFromDriveFolder(
 
   let response: Response;
   try {
-    response = await fetch('/api/media/import-folder', {
+    response = await fetch(resolveApiUrl('/api/media/import-folder'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -321,7 +322,7 @@ export async function importEpisodesFromDriveFolder(
     throw new DriveMediaError(
       'network_error',
       0,
-      'Could not reach /api/media/import-folder. Make sure the app is running with Vercel serverless functions.'
+      'Could not reach /api/media/import-folder. Check your network connection or backend API server.'
     );
   }
 
@@ -332,7 +333,7 @@ export async function importEpisodesFromDriveFolder(
       throw new DriveMediaError(
         'server_not_configured',
         404,
-        'Drive folder import API (/api/media/import-folder) is unavailable in Vite-only local preview. Deploy on Vercel or run `vercel dev`.'
+        'Drive folder import API (/api/media/import-folder) is unavailable on this host. Configure VITE_API_BASE_URL or run the backend API server.'
       );
     }
     throw mapDriveApiError(response.status, payload);

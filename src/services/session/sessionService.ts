@@ -4,6 +4,7 @@ import type {
   AdminSessionActionType,
   DeviceInfo,
 } from '../../types';
+import { buildApiUnavailableMessage, fetchApiJson } from '../api/apiClient';
 
 const DEVICE_ID_STORAGE_KEY = 'dhruv_tales_device_id_v1';
 const PENDING_WARNING_KEY = 'dhruv_tales_device_warning_v1';
@@ -181,26 +182,6 @@ export function loadPendingBanNotice(): AccountBanNotice | null {
   }
 }
 
-async function fetchSessionJson(
-  url: string,
-  init: RequestInit
-): Promise<{ available: boolean; status: number; data: Record<string, unknown> }> {
-  try {
-    const response = await fetch(url, init);
-    const contentType = response.headers.get('content-type') ?? '';
-    if (!contentType.includes('application/json')) {
-      return { available: false, status: response.status, data: {} };
-    }
-    const data = (await response.json()) as Record<string, unknown>;
-    if (response.status === 503 && data.code === 'server_not_configured') {
-      return { available: false, status: response.status, data };
-    }
-    return { available: true, status: response.status, data };
-  } catch {
-    return { available: false, status: 0, data: {} };
-  }
-}
-
 /**
  * Calls POST /api/session/register after login (Google, Email, or Phone).
  * Enforces one active device per user account server-side via Firebase Admin SDK.
@@ -210,7 +191,7 @@ export async function registerDeviceSession(user: User): Promise<RegisterSession
   const deviceId = getOrCreateDeviceId();
   const deviceInfo = getClientDeviceInfo();
 
-  const api = await fetchSessionJson('/api/session/register', {
+  const api = await fetchApiJson('/api/session/register', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -279,7 +260,7 @@ export async function logoutDeviceSession(user: User | null): Promise<void> {
   try {
     const idToken = await user.getIdToken();
     const deviceId = getOrCreateDeviceId();
-    await fetchSessionJson('/api/session/logout', {
+    await fetchApiJson('/api/session/logout', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -312,7 +293,7 @@ export async function runAdminSessionActionApi(
   }
 ): Promise<AdminSessionApiResult> {
   const idToken = await adminUser.getIdToken();
-  const api = await fetchSessionJson('/api/session/admin', {
+  const api = await fetchApiJson('/api/session/admin', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -322,7 +303,11 @@ export async function runAdminSessionActionApi(
   });
 
   if (!api.available) {
-    return { usedServerApi: false, ok: false };
+    return {
+      usedServerApi: false,
+      ok: false,
+      error: buildApiUnavailableMessage('/api/session/admin', api),
+    };
   }
 
   if (api.status !== 200) {

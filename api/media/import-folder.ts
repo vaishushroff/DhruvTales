@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
+import { applyCorsHeaders } from '../_lib/cors';
 import { DriveClientError, listDriveFolderFiles } from '../_lib/driveClient';
 import {
   AuthVerificationError,
@@ -36,6 +37,7 @@ function slugPart(raw: string): string {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
+  if (applyCorsHeaders(req, res)) return;
   res.setHeader('Cache-Control', 'private, no-store');
 
   if (req.method !== 'POST') {
