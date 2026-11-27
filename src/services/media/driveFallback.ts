@@ -177,6 +177,14 @@ export function parseBatchEpisodeLines(
       provider = 'drive';
       mediaId = driveId;
       displaySource = `Drive (${driveId.slice(0, 10)}...)`;
+    } else if (/drive\.google\.com\/(?:drive\/)?(?:u\/\d+\/)?folders\//i.test(sourceToken)) {
+      invalid.push({
+        lineNumber,
+        rawLine,
+        reason:
+          'This is a Google Drive folder link, not a single audio/video file link. Open the folder in Google Drive, right-click each file → Share → "Anyone with the link" → Copy link, and paste one file link per line.',
+      });
+      return;
     } else if (/^https:\/\//i.test(sourceToken)) {
       const safeUrl = sanitizeSafeUrl(sourceToken);
       if (!safeUrl || safeUrl.length > 160) {
@@ -197,7 +205,7 @@ export function parseBatchEpisodeLines(
       invalid.push({
         lineNumber,
         rawLine,
-        reason: 'Provide a valid Google Drive share link/file ID or a direct https:// media URL.',
+        reason: 'Provide a valid Google Drive file share link/ID or a direct https:// media URL.',
       });
       return;
     }

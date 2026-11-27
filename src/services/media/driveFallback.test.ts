@@ -66,3 +66,14 @@ test('parseBatchEpisodeLines groups audio+video Drive links, auto-numbers, skips
   assert.equal(plan.groups[1].audioRef.provider, 'demo');
   assert.equal(plan.groups[1].audioRef.id, 'https://cdn.dhruvtales.com/ep03.mp3');
 });
+
+test('parseBatchEpisodeLines rejects Google Drive folder URLs with helpful file-link guidance', () => {
+  const plan = parseBatchEpisodeLines(
+    'https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz?usp=sharing',
+    []
+  );
+  assert.equal(plan.groups.length, 0);
+  assert.equal(plan.invalid.length, 1);
+  assert.match(plan.invalid[0].reason, /folder link/i);
+});
+

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -46,6 +46,7 @@ export const DriveFolderImportModal: React.FC<DriveFolderImportModalProps> = ({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [infoNotice, setInfoNotice] = useState<string | null>(null);
   const [result, setResult] = useState<DriveFolderImportResult | null>(null);
+  const directTextareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -122,8 +123,11 @@ export const DriveFolderImportModal: React.FC<DriveFolderImportModalProps> = ({
       if (err instanceof DriveMediaError && err.code === 'server_not_configured') {
         setMode('direct');
         setInfoNotice(
-          'Automatic Drive folder scanning requires a Node API server, which is not active on this static host. Switched to Direct Batch Links so you can import episodes directly into Firestore right now.'
+          'Automatic folder scanning needs a backend server, which is not active on this host. Switched to Direct Batch Links—open your Drive folder, copy each file’s Share link ("Anyone with the link"), and paste one per line below.'
         );
+        requestAnimationFrame(() => {
+          directTextareaRef.current?.focus();
+        });
       } else if (err instanceof DriveMediaError) {
         setErrorMsg(err.message);
       } else {
@@ -227,12 +231,12 @@ export const DriveFolderImportModal: React.FC<DriveFolderImportModalProps> = ({
                   Works on any hosting (no backend server needed)
                 </p>
                 <p className="text-[#A39E93] leading-relaxed">
-                  Paste one link per line using shared Google Drive file links (&ldquo;Anyone with the link can view&rdquo;), Drive file IDs, or direct HTTPS MP3/MP4 URLs.
+                  In Google Drive, right-click an audio/video file → <span className="text-[#F5F3EE]">Share</span> → set General access to <span className="text-[#F5F3EE]">Anyone with the link</span> → <span className="text-[#F5F3EE]">Copy link</span>, then paste one link per line below (no special format needed, or add an optional episode title with <code className="text-[#F3C669]">|</code>).
                 </p>
                 <p className="font-mono-tabular text-[11px] text-[#F3C669] leading-relaxed">
-                  EP01 | The First Star | https://drive.google.com/file/d/FILE_ID/view
+                  https://drive.google.com/file/d/FILE_ID/view
                   <br />
-                  EP01_video | https://drive.google.com/file/d/VIDEO_ID/view
+                  EP01 | The First Star | https://drive.google.com/file/d/FILE_ID/view
                 </p>
               </div>
             </div>
@@ -266,12 +270,16 @@ export const DriveFolderImportModal: React.FC<DriveFolderImportModalProps> = ({
                   Episode Links (one per line)
                 </label>
                 <textarea
+                  ref={directTextareaRef}
                   id="direct-links-textarea"
                   data-testid="direct-links-textarea"
                   rows={5}
                   value={directLinksInput}
-                  onChange={(e) => setDirectLinksInput(e.target.value)}
-                  placeholder={`EP01 | Episode Title | https://drive.google.com/file/d/...\nEP02 | Next Chapter | https://cdn.yourdomain.com/ep02.mp3`}
+                  onChange={(e) => {
+                    setDirectLinksInput(e.target.value);
+                    if (errorMsg) setErrorMsg(null);
+                  }}
+                  placeholder={`https://drive.google.com/file/d/YOUR_FILE_ID/view\nEP02 | Next Chapter | https://cdn.yourdomain.com/ep02.mp3`}
                   disabled={importing}
                   className="w-full p-3.5 rounded-xl bg-[#0B0B0E] border border-white/15 text-xs font-mono text-[#F5F3EE] placeholder:text-[#66625B] focus:outline-none focus:border-[#E5A93C]"
                 />
