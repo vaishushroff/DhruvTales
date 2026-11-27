@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -10,7 +10,6 @@ import {
   Pause,
   Play,
   Sparkles,
-  Upload,
   UserCheck,
   UserPlus,
 } from 'lucide-react';
@@ -55,7 +54,6 @@ export const StoryDetailsPage: React.FC = () => {
     currentEpisode,
     isPlaying,
     playEpisode,
-    playLocalFileForEpisode,
     replayFromChoice,
     togglePlayPause,
   } = useAudioPlayer();
@@ -64,7 +62,6 @@ export const StoryDetailsPage: React.FC = () => {
     null
   );
   const [unlockModalEpisode, setUnlockModalEpisode] = useState<Episode | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const story = useMemo(() => stories.find((s) => s.id === storyId) ?? null, [stories, storyId]);
 
@@ -173,13 +170,6 @@ export const StoryDetailsPage: React.FC = () => {
     if (targetEp) {
       void handleEpisodeClick(targetEp);
     }
-  };
-
-  const handleLocalMediaSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !storyEpisodes[0]) return;
-    void playLocalFileForEpisode(file, story, storyEpisodes[0]);
-    e.target.value = '';
   };
 
   return (
@@ -531,32 +521,6 @@ export const StoryDetailsPage: React.FC = () => {
               </div>
             );
           })}
-        </div>
-      </section>
-
-      {/* DemoMediaProvider Local Media Tester */}
-      <section className="rounded-2xl bg-[#141418] border border-white/[0.08] p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="space-y-1">
-          <h3 className="text-sm font-semibold text-[#F5F3EE]">{t('story.testLocalAudio')}</h3>
-          <p className="text-xs text-[#A39E93]">{t('story.localAudioHint')}</p>
-        </div>
-        <div className="shrink-0">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="audio/*,video/*"
-            onChange={handleLocalMediaSelected}
-            className="hidden"
-            aria-label="Choose local audio or video file"
-          />
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            className="min-h-[44px] px-4 rounded-xl bg-[#1C1C22] border border-white/15 text-xs font-medium text-[#F5F3EE] hover:border-[#E5A93C]/50 inline-flex items-center gap-2 whitespace-nowrap transition-colors"
-          >
-            <Upload className="w-3.5 h-3.5 text-[#E5A93C]" aria-hidden="true" />
-            {t('story.loadLocalMedia')}
-          </button>
         </div>
       </section>
 

@@ -14,7 +14,7 @@ service cloud.firestore {
 
     function isVerified() {
       return isSignedIn() && (
-        request.auth.token.email_verified == true ||
+        ('email_verified' in request.auth.token && request.auth.token.email_verified == true) ||
         ('phone_number' in request.auth.token && request.auth.token.phone_number is string && request.auth.token.phone_number.size() >= 6)
       );
     }
@@ -35,13 +35,24 @@ service cloud.firestore {
       return resource.data;
     }
 
+    function hasUserDocAdminFlag(userData) {
+      return ('admin' in userData && userData.admin == true) ||
+        ('role' in userData && userData.role == 'admin');
+    }
+
     function isAdmin() {
       return isVerified() && (
-        request.auth.token.email == 'vaishushroff@gmail.com' ||
+        (
+          'email' in request.auth.token &&
+          request.auth.token.email is string &&
+          'email_verified' in request.auth.token &&
+          request.auth.token.email_verified == true &&
+          request.auth.token.email.lower() == 'vaishushroff@gmail.com'
+        ) ||
         exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
         (
           exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+          hasUserDocAdminFlag(get(/databases/$(database)/documents/users/$(request.auth.uid)).data)
         )
       );
     }
@@ -66,18 +77,19 @@ service cloud.firestore {
         ]) &&
         data.keys().hasOnly([
           'uid', 'email', 'phoneNumber', 'displayName', 'bio', 'preferredLanguage', 'preferredFormat',
-          'role', 'isDisabled', 'warningCount', 'banned', 'bannedAt', 'banReason',
-          'activeDevice', 'lastSeen', 'avatarInitials', 'createdAt', 'updatedAt'
+          'role', 'admin', 'isDisabled', 'warningCount', 'banned', 'bannedAt', 'banReason',
+          'activeDevice', 'lastSeen', 'subscriptionTier', 'avatarInitials', 'createdAt', 'updatedAt'
         ]) &&
         data.uid is string && data.uid == userId && isValidId(data.uid) &&
         data.email is string && data.email.size() <= 200 &&
         (data.email.size() >= 3 || ('phoneNumber' in data && data.phoneNumber is string && data.phoneNumber.size() >= 6 && data.phoneNumber.size() <= 32)) &&
-        (!('phoneNumber' in data) || (data.phoneNumber is string && data.phoneNumber.size() <= 32)) &&
+        (!('phoneNumber' in data) || data.phoneNumber == null || (data.phoneNumber is string && data.phoneNumber.size() <= 32)) &&
         data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
-        (!('bio' in data) || (data.bio is string && data.bio.size() <= 300)) &&
+        (!('bio' in data) || data.bio == null || (data.bio is string && data.bio.size() <= 300)) &&
         data.preferredLanguage is string && data.preferredLanguage.size() >= 2 && data.preferredLanguage.size() <= 10 &&
-        (!('preferredFormat' in data) || data.preferredFormat in ['audio', 'video']) &&
+        (!('preferredFormat' in data) || data.preferredFormat == null || data.preferredFormat in ['audio', 'video']) &&
         data.role in ['user', 'creator', 'admin'] &&
+        (!('admin' in data) || data.admin is bool) &&
         (!('isDisabled' in data) || data.isDisabled is bool) &&
         (!('warningCount' in data) || (data.warningCount is number && data.warningCount >= 0 && data.warningCount <= 100 && data.warningCount % 1 == 0)) &&
         (!('banned' in data) || data.banned is bool) &&
@@ -85,6 +97,7 @@ service cloud.firestore {
         (!('banReason' in data) || data.banReason == null || (data.banReason is string && data.banReason.size() <= 300)) &&
         (!('activeDevice' in data) || data.activeDevice == null || data.activeDevice is map) &&
         (!('lastSeen' in data) || data.lastSeen == null || data.lastSeen is timestamp) &&
+        (!('subscriptionTier' in data) || data.subscriptionTier == null || (data.subscriptionTier is string && data.subscriptionTier.size() <= 32)) &&
         data.avatarInitials is string && data.avatarInitials.size() >= 1 && data.avatarInitials.size() <= 4 &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
@@ -198,7 +211,7 @@ service cloud.firestore {
         ]) &&
         data.keys().hasOnly([
           'id', 'storyId', 'creatorOwnerUid', 'episodeNumber', 'title', 'titleHi',
-          'description', 'descriptionHi', 'durationSec', 'priceCoins',
+          'description', 'descriptionHi', 'durationSec', 'priceCoins', 'accessTier',
           'mediaRef', 'audioRef', 'videoMediaRef', 'choicePoint', 'isEnding',
           'isDeleted', 'deletedAt', 'deletedByUid', 'publishedAt', 'createdAt'
         ]) &&
@@ -212,6 +225,7 @@ service cloud.firestore {
         (!('descriptionHi' in data) || (data.descriptionHi is string && data.descriptionHi.size() <= 600)) &&
         data.durationSec is number && data.durationSec >= 1 && data.durationSec <= 86400 &&
         isValidCoinPrice(data.priceCoins) &&
+        (!('accessTier' in data) || data.accessTier == null || (data.accessTier is string && data.accessTier.size() <= 32)) &&
         isValidMediaRef(data.mediaRef) &&
         (!('audioRef' in data) || isValidMediaRef(data.audioRef)) &&
         (!('videoMediaRef' in data) || isValidMediaRef(data.videoMediaRef)) &&
@@ -221,6 +235,34 @@ service cloud.firestore {
         (!('deletedAt' in data) || data.deletedAt == null || data.deletedAt is timestamp) &&
         (!('deletedByUid' in data) || data.deletedByUid == null || (data.deletedByUid is string && isValidId(data.deletedByUid))) &&
         data.publishedAt is timestamp &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidCoinWallet(data, userId) {
+      return data.keys().hasAll(['uid', 'balance', 'lifetimePurchased', 'lifetimeSpent', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'balance', 'lifetimePurchased', 'lifetimeSpent', 'updatedAt']) &&
+        data.uid is string && data.uid == userId && isValidId(data.uid) &&
+        data.balance is number && data.balance >= 0 && data.balance <= 100000000 && data.balance % 1 == 0 &&
+        data.lifetimePurchased is number && data.lifetimePurchased >= 0 && data.lifetimePurchased <= 100000000 && data.lifetimePurchased % 1 == 0 &&
+        data.lifetimeSpent is number && data.lifetimeSpent >= 0 && data.lifetimeSpent <= 100000000 && data.lifetimeSpent % 1 == 0 &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidCoinTransaction(data, txId) {
+      return data.keys().hasAll(['id', 'uid', 'type', 'amount', 'balanceAfter', 'createdAt', 'note']) &&
+        data.keys().hasOnly([
+          'id', 'uid', 'type', 'amount', 'balanceAfter',
+          'episodeId', 'storyId', 'creatorId', 'createdAt', 'note'
+        ]) &&
+        data.id is string && data.id == txId && isValidId(data.id) &&
+        data.uid is string && isValidId(data.uid) &&
+        data.type in ['purchase', 'spend', 'admin_adjust', 'bonus', 'refund'] &&
+        data.amount is number && data.amount != 0 && data.amount >= -1000000 && data.amount <= 1000000 && data.amount % 1 == 0 &&
+        data.balanceAfter is number && data.balanceAfter >= 0 && data.balanceAfter <= 100000000 && data.balanceAfter % 1 == 0 &&
+        (!('episodeId' in data) || data.episodeId == null || (data.episodeId is string && data.episodeId.size() <= 128)) &&
+        (!('storyId' in data) || data.storyId == null || (data.storyId is string && data.storyId.size() <= 128)) &&
+        (!('creatorId' in data) || data.creatorId == null || (data.creatorId is string && data.creatorId.size() <= 128)) &&
+        data.note is string && data.note.size() >= 1 && data.note.size() <= 300 &&
         data.createdAt is timestamp;
     }
 
@@ -406,6 +448,7 @@ service cloud.firestore {
         isOwner(userId) &&
         isValidUserProfile(incoming(), userId) &&
         incoming().role == 'user' &&
+        !('admin' in incoming()) &&
         (!('isDisabled' in incoming()) || incoming().isDisabled == false) &&
         !('warningCount' in incoming()) &&
         !('banned' in incoming()) &&
@@ -413,6 +456,7 @@ service cloud.firestore {
         !('banReason' in incoming()) &&
         !('activeDevice' in incoming()) &&
         !('lastSeen' in incoming()) &&
+        !('subscriptionTier' in incoming()) &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time;
       allow update: if isValidId(userId) &&
@@ -425,11 +469,13 @@ service cloud.firestore {
             isOwner(userId) &&
             (!('banned' in existing()) || existing().banned == false) &&
             incoming().role == existing().role &&
+            (!('admin' in incoming()) || ('admin' in existing() && incoming().admin == existing().admin)) &&
             incoming().email == existing().email &&
             (!('isDisabled' in incoming()) || ('isDisabled' in existing() && incoming().isDisabled == existing().isDisabled)) &&
             (!('warningCount' in incoming()) || ('warningCount' in existing() && incoming().warningCount == existing().warningCount)) &&
             (!('banned' in incoming()) || ('banned' in existing() && incoming().banned == existing().banned)) &&
             (!('activeDevice' in incoming()) || ('activeDevice' in existing() && incoming().activeDevice == existing().activeDevice)) &&
+            (!('subscriptionTier' in incoming()) || ('subscriptionTier' in existing() && incoming().subscriptionTier == existing().subscriptionTier)) &&
             incoming().diff(existing()).affectedKeys().hasOnly([
               'displayName', 'bio', 'preferredLanguage', 'preferredFormat',
               'avatarInitials', 'updatedAt'
@@ -537,6 +583,7 @@ service cloud.firestore {
       allow list: if existing().episodeNumber >= 1 || isAdmin();
       allow create: if isValidId(episodeId) &&
         isValidEpisode(incoming(), episodeId) &&
+        !('accessTier' in incoming()) &&
         incoming().createdAt == request.time && (
           isAdmin() || (
             isCreatorRole() &&
@@ -622,18 +669,32 @@ service cloud.firestore {
       allow delete: if isValidId(unlockId) && isVerified() && (existing().userId == request.auth.uid || isAdmin());
     }
 
-    // 10. Coin Wallets (STRICTLY server-written via Firebase Admin SDK; read-only for owner or Admin)
+    // 10. Coin Wallets (read-only for regular users; writable only by server Admin SDK or verified Admins)
     match /wallets/{userId} {
       allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
       allow list: if isAdmin();
-      allow create, update, delete: if false;
+      allow create: if isValidId(userId) &&
+        isAdmin() &&
+        isValidCoinWallet(incoming(), userId) &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(userId) &&
+        isAdmin() &&
+        isValidCoinWallet(incoming(), userId) &&
+        incoming().uid == existing().uid &&
+        incoming().updatedAt == request.time;
+      allow delete: if false;
     }
 
-    // 11. Coin Transactions (IMMUTABLE server-written ledger; read-only for owner or Admin)
+    // 11. Coin Transactions (IMMUTABLE append-only ledger; regular users read-only; verified Admins may append admin_adjust/bonus/refund)
     match /coinTransactions/{txId} {
       allow get: if isValidId(txId) && isSignedIn() && (existing().uid == request.auth.uid || isAdmin());
       allow list: if isSignedIn() && (existing().uid == request.auth.uid || isAdmin());
-      allow create, update, delete: if false;
+      allow create: if isValidId(txId) &&
+        isAdmin() &&
+        isValidCoinTransaction(incoming(), txId) &&
+        incoming().type in ['admin_adjust', 'bonus', 'refund'] &&
+        incoming().createdAt == request.time;
+      allow update, delete: if false;
     }
 
     // 12. Permanent Episode Unlocks (STRICTLY server-written via /api/coins/unlock; read-only for owner or Admin)

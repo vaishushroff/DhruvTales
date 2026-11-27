@@ -595,7 +595,8 @@ export async function updatePricingViaApi(
 
 /**
  * Calls POST /api/coins/admin-adjust for Admin-only wallet adjustments, bonuses, and refunds.
- * Requires the backend API server (never mutates wallets from the browser).
+ * Returns `{ usedServerApi: false }` when the host does not run the Node API backend so
+ * verified Admins can fall back directly to an atomic Firestore transaction.
  */
 export async function adminAdjustWalletViaApi(
   user: User,
@@ -607,7 +608,10 @@ export async function adminAdjustWalletViaApi(
     episodeId?: string | null;
     storyId?: string | null;
   }
-): Promise<{ wallet: CoinWallet; transaction: CoinTransaction }> {
+): Promise<
+  | { usedServerApi: true; wallet: CoinWallet; transaction: CoinTransaction }
+  | { usedServerApi: false; reason: string }
+> {
   const idToken = await user.getIdToken();
   const api = await fetchApiJson('/api/coins/admin-adjust', {
     method: 'POST',
@@ -619,13 +623,17 @@ export async function adminAdjustWalletViaApi(
   });
 
   if (!api.available) {
-    throw new Error(buildApiUnavailableMessage('/api/coins/admin-adjust', api));
+    return {
+      usedServerApi: false,
+      reason: buildApiUnavailableMessage('/api/coins/admin-adjust', api),
+    };
   }
   if (api.status !== 200) {
     throw new Error(String(api.data.error ?? 'Failed to adjust user coin wallet.'));
   }
 
   return {
+    usedServerApi: true,
     wallet: api.data.wallet as CoinWallet,
     transaction: api.data.transaction as CoinTransaction,
   };

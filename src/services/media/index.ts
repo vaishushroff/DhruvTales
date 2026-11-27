@@ -23,6 +23,7 @@ export function listMediaProviders(): MediaProvider[] {
 export {
   DriveMediaError,
   DriveMediaProvider,
+  importEpisodesFromDirectLinks,
   importEpisodesFromDriveFolder,
   type DriveFolderImportResult,
 } from './DriveProvider';

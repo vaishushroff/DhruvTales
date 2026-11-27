@@ -13,12 +13,11 @@ import {
   ServerConfigError,
   verifyFirebaseBearerToken,
 } from '../_lib/firebaseAdmin';
+import { verifyAdminActor } from '../_lib/adminAuth';
 import {
   isValidFirestoreDocId,
   mapFirestoreWallet,
 } from '../_lib/firestoreModels';
-
-const BOOTSTRAP_ADMIN_EMAIL = 'vaishushroff@gmail.com';
 const ALLOWED_TYPES = new Set<Extract<CoinTransactionType, 'admin_adjust' | 'bonus' | 'refund'>>([
   'admin_adjust',
   'bonus',
@@ -37,15 +36,6 @@ function parseBody(req: VercelRequest): Record<string, unknown> {
   return req.body as Record<string, unknown>;
 }
 
-async function isAdminActor(uid: string, email: string | undefined): Promise<boolean> {
-  if (email && email.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL) return true;
-  const db = getAdminDb();
-  const [adminSnap, userSnap] = await Promise.all([
-    db.collection('admins').doc(uid).get(),
-    db.collection('users').doc(uid).get(),
-  ]);
-  return adminSnap.exists || userSnap.data()?.role === 'admin';
-}
 
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
   if (applyCorsHeaders(req, res)) return;
@@ -64,8 +54,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     const actorUid = decoded!.uid;
     const actorEmail = decoded!.email ?? '';
 
-    const isAdmin = await isAdminActor(actorUid, actorEmail);
-    if (!isAdmin) {
+    const adminAccess = await verifyAdminActor(decoded!);
+    if (!adminAccess.allowed) {
       res.status(403).json({
         code: 'admin_only',
         error: 'Only Admins can adjust user coin wallets.',

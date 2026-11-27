@@ -11,9 +11,8 @@ import {
 } from '../_lib/firebaseAdmin';
 import { isValidFirestoreDocId, mapFirestoreActiveDevice } from '../_lib/firestoreModels';
 import { applyCorsHeaders } from '../_lib/cors';
+import { verifyAdminActor } from '../_lib/adminAuth';
 import { evaluateAdminSessionAction } from '../_lib/sessionEngine';
-
-const BOOTSTRAP_ADMIN_EMAIL = 'vaishushroff@gmail.com';
 const ALLOWED_ACTIONS = new Set<AdminSessionActionType>([
   'ban',
   'unban',
@@ -33,15 +32,6 @@ function parseBody(req: VercelRequest): Record<string, unknown> {
   return req.body as Record<string, unknown>;
 }
 
-async function isAdminActor(uid: string, email: string | undefined): Promise<boolean> {
-  if (email && email.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL) return true;
-  const db = getAdminDb();
-  const [adminSnap, userSnap] = await Promise.all([
-    db.collection('admins').doc(uid).get(),
-    db.collection('users').doc(uid).get(),
-  ]);
-  return adminSnap.exists || userSnap.data()?.role === 'admin';
-}
 
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
   if (applyCorsHeaders(req, res)) return;
@@ -60,8 +50,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     const actorUid = decoded!.uid;
     const actorEmail = decoded!.email ?? `${actorUid}@dhruvtales.local`;
 
-    const isAdmin = await isAdminActor(actorUid, decoded!.email);
-    if (!isAdmin) {
+    const adminAccess = await verifyAdminActor(decoded!);
+    if (!adminAccess.allowed) {
       res.status(403).json({
         code: 'admin_only',
         error: 'Only Administrators can manage user bans, warnings, and device sessions.',

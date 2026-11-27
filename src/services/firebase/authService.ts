@@ -167,6 +167,13 @@ export async function syncUserProfile(
   const isVerifiedAccount = Boolean(user.emailVerified || user.phoneNumber);
   const isBootstrapAdmin =
     user.emailVerified && user.email?.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL;
+  let hasAdminTokenClaim = false;
+  try {
+    const tokenResult = await user.getIdTokenResult();
+    hasAdminTokenClaim = tokenResult.claims?.admin === true;
+  } catch {
+    hasAdminTokenClaim = false;
+  }
 
   const userRef = doc(db, 'users', user.uid);
   try {
@@ -181,10 +188,13 @@ export async function syncUserProfile(
       const resolvedPhone =
         (typeof data.phoneNumber === 'string' && data.phoneNumber.trim()) ||
         fallbackProfile.phoneNumber;
+      const hasAdminFlag = data.admin === true;
       const roleVal =
         data.role === 'admin' || data.role === 'creator' || data.role === 'user'
           ? data.role
           : fallbackProfile.role;
+      const isResolvedAdmin =
+        isBootstrapAdmin || hasAdminTokenClaim || hasAdminFlag || roleVal === 'admin';
 
       return {
         ...fallbackProfile,
@@ -196,7 +206,8 @@ export async function syncUserProfile(
         preferredLanguage:
           typeof data.preferredLanguage === 'string' ? data.preferredLanguage : defaultLanguage,
         preferredFormat: data.preferredFormat === 'video' ? 'video' : 'audio',
-        role: isBootstrapAdmin ? 'admin' : roleVal,
+        role: isResolvedAdmin ? 'admin' : roleVal,
+        admin: isResolvedAdmin,
         isDisabled: Boolean(data.isDisabled),
         warningCount:
           typeof data.warningCount === 'number' && Number.isFinite(data.warningCount)
@@ -214,7 +225,7 @@ export async function syncUserProfile(
     }
 
     if (!isVerifiedAccount) {
-      return fallbackProfile;
+      return hasAdminTokenClaim ? { ...fallbackProfile, role: 'admin', admin: true } : fallbackProfile;
     }
 
     const baseDoc: Record<string, unknown> = {

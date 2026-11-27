@@ -90,7 +90,7 @@ async function tryServerCmsApi(
     if (res.ok) {
       return { ok: true, data };
     }
-    if (res.status === 404 || res.status === 503) {
+    if (res.status === 404 || res.status === 405 || res.status === 503) {
       return { ok: false, fallbackAllowed: true };
     }
     return {

@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   FolderInput,
   Info,
+  Link2,
   Loader2,
   SkipForward,
   X,
@@ -11,14 +12,19 @@ import {
 import { useLanguage } from '../hooks/useLanguage';
 import {
   DriveMediaError,
+  importEpisodesFromDirectLinks,
   importEpisodesFromDriveFolder,
   type DriveFolderImportResult,
 } from '../services/media';
-import type { Story } from '../types';
+import type { Episode, Story } from '../types';
+
+type ImportMode = 'direct' | 'folder';
 
 interface DriveFolderImportModalProps {
   open: boolean;
   story: Story | null;
+  existingEpisodes?: Episode[];
+  actorUid?: string;
   onClose: () => void;
   onImportComplete: (result: DriveFolderImportResult) => Promise<void>;
 }
@@ -26,13 +32,19 @@ interface DriveFolderImportModalProps {
 export const DriveFolderImportModal: React.FC<DriveFolderImportModalProps> = ({
   open,
   story,
+  existingEpisodes = [],
+  actorUid = '',
   onClose,
   onImportComplete,
 }) => {
   const { lang, t } = useLanguage();
+  const [mode, setMode] = useState<ImportMode>('direct');
   const [folderInput, setFolderInput] = useState('');
+  const [directLinksInput, setDirectLinksInput] = useState('');
+  const [defaultPriceCoins, setDefaultPriceCoins] = useState('0');
   const [importing, setImporting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [infoNotice, setInfoNotice] = useState<string | null>(null);
   const [result, setResult] = useState<DriveFolderImportResult | null>(null);
 
   useEffect(() => {
@@ -49,6 +61,7 @@ export const DriveFolderImportModal: React.FC<DriveFolderImportModalProps> = ({
   useEffect(() => {
     if (open) {
       setErrorMsg(null);
+      setInfoNotice(null);
       setResult(null);
     }
   }, [open, story?.id]);
@@ -59,6 +72,39 @@ export const DriveFolderImportModal: React.FC<DriveFolderImportModalProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setErrorMsg(null);
+    setInfoNotice(null);
+    setResult(null);
+
+    if (mode === 'direct') {
+      const trimmed = directLinksInput.trim();
+      if (!trimmed) {
+        setErrorMsg('Paste at least one Google Drive share link/ID or direct HTTPS media URL.');
+        return;
+      }
+
+      setImporting(true);
+      try {
+        const importRes = await importEpisodesFromDirectLinks({
+          story,
+          existingEpisodes,
+          actorUid: actorUid || story.creatorOwnerUid,
+          rawLines: trimmed,
+          defaultPriceCoins: Math.max(0, Math.floor(Number(defaultPriceCoins) || 0)),
+        });
+        setResult(importRes);
+        if (importRes.created.length > 0) {
+          setDirectLinksInput('');
+          await onImportComplete(importRes);
+        }
+      } catch (err) {
+        setErrorMsg(err instanceof Error ? err.message : t('studio.driveImportGenericError'));
+      } finally {
+        setImporting(false);
+      }
+      return;
+    }
+
     const trimmed = folderInput.trim();
     if (!trimmed) {
       setErrorMsg(t('studio.driveFolderRequired'));
@@ -66,9 +112,6 @@ export const DriveFolderImportModal: React.FC<DriveFolderImportModalProps> = ({
     }
 
     setImporting(true);
-    setErrorMsg(null);
-    setResult(null);
-
     try {
       const importRes = await importEpisodesFromDriveFolder(story.id, trimmed);
       setResult(importRes);
@@ -76,7 +119,12 @@ export const DriveFolderImportModal: React.FC<DriveFolderImportModalProps> = ({
         await onImportComplete(importRes);
       }
     } catch (err) {
-      if (err instanceof DriveMediaError) {
+      if (err instanceof DriveMediaError && err.code === 'server_not_configured') {
+        setMode('direct');
+        setInfoNotice(
+          'Automatic Drive folder scanning requires a Node API server, which is not active on this static host. Switched to Direct Batch Links so you can import episodes directly into Firestore right now.'
+        );
+      } else if (err instanceof DriveMediaError) {
         setErrorMsg(err.message);
       } else {
         setErrorMsg(err instanceof Error ? err.message : t('studio.driveImportGenericError'));
@@ -113,38 +161,160 @@ export const DriveFolderImportModal: React.FC<DriveFolderImportModalProps> = ({
           </button>
         </div>
 
-        <div className="rounded-xl bg-[#0B0B0E] border border-white/[0.08] p-4 space-y-2 text-xs text-[#D6D2C9]">
-          <div className="flex items-start gap-2">
-            <Info className="w-4 h-4 text-[#E5A93C] shrink-0 mt-0.5" aria-hidden="true" />
-            <div className="space-y-1.5">
-              <p className="font-medium text-[#F5F3EE]">{t('studio.driveNamingHeading')}</p>
-              <p className="text-[#A39E93] leading-relaxed">{t('studio.driveNamingBody')}</p>
-              <p className="font-mono-tabular text-[11px] text-[#F3C669]">
-                EP01_audio.mp3 · EP01_video.mp4 · EP02_audio.mp3
-              </p>
-              <p className="text-[11px] text-[#8A857B] leading-relaxed">
-                {t('studio.driveLimitsNotice')}
-              </p>
-            </div>
-          </div>
+        {/* Mode Switcher */}
+        <div
+          role="tablist"
+          aria-label="Episode import mode"
+          className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-[#0B0B0E] border border-white/10"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === 'direct'}
+            data-testid="import-mode-direct"
+            disabled={importing}
+            onClick={() => {
+              setMode('direct');
+              setErrorMsg(null);
+            }}
+            className={`min-h-[40px] px-3 rounded-lg text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors ${
+              mode === 'direct'
+                ? 'bg-[#E5A93C] text-[#0B0B0E]'
+                : 'text-[#A39E93] hover:text-[#F5F3EE]'
+            }`}
+          >
+            <Link2 className="w-3.5 h-3.5" aria-hidden="true" />
+            Direct Batch Links
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === 'folder'}
+            data-testid="import-mode-folder"
+            disabled={importing}
+            onClick={() => {
+              setMode('folder');
+              setErrorMsg(null);
+              setInfoNotice(null);
+            }}
+            className={`min-h-[40px] px-3 rounded-lg text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors ${
+              mode === 'folder'
+                ? 'bg-[#E5A93C] text-[#0B0B0E]'
+                : 'text-[#A39E93] hover:text-[#F5F3EE]'
+            }`}
+          >
+            <FolderInput className="w-3.5 h-3.5" aria-hidden="true" />
+            Drive Folder Scan
+          </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-1.5">
-            <label htmlFor="drive-folder-input" className="text-xs font-medium text-[#A39E93] block">
-              {t('studio.driveFolderLabel')}
-            </label>
-            <input
-              id="drive-folder-input"
-              data-testid="drive-folder-input"
-              type="text"
-              value={folderInput}
-              onChange={(e) => setFolderInput(e.target.value)}
-              placeholder="1AbCdEfGhIjKlMnOpQrStUvWxYz or https://drive.google.com/drive/folders/..."
-              disabled={importing}
-              className="w-full h-11 px-3.5 rounded-xl bg-[#0B0B0E] border border-white/15 text-sm text-[#F5F3EE] placeholder:text-[#66625B] focus:outline-none focus:border-[#E5A93C]"
-            />
+        {infoNotice && (
+          <div
+            role="status"
+            className="rounded-xl bg-amber-950/35 border border-amber-500/35 p-3.5 flex items-start gap-2.5 text-xs text-[#F3C669]"
+          >
+            <Info className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" />
+            <p className="leading-relaxed">{infoNotice}</p>
           </div>
+        )}
+
+        {mode === 'direct' ? (
+          <div className="rounded-xl bg-[#0B0B0E] border border-white/[0.08] p-4 space-y-2 text-xs text-[#D6D2C9]">
+            <div className="flex items-start gap-2">
+              <Info className="w-4 h-4 text-[#E5A93C] shrink-0 mt-0.5" aria-hidden="true" />
+              <div className="space-y-1.5">
+                <p className="font-medium text-[#F5F3EE]">
+                  Works on any hosting (no backend server needed)
+                </p>
+                <p className="text-[#A39E93] leading-relaxed">
+                  Paste one link per line using shared Google Drive file links (&ldquo;Anyone with the link can view&rdquo;), Drive file IDs, or direct HTTPS MP3/MP4 URLs.
+                </p>
+                <p className="font-mono-tabular text-[11px] text-[#F3C669] leading-relaxed">
+                  EP01 | The First Star | https://drive.google.com/file/d/FILE_ID/view
+                  <br />
+                  EP01_video | https://drive.google.com/file/d/VIDEO_ID/view
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-xl bg-[#0B0B0E] border border-white/[0.08] p-4 space-y-2 text-xs text-[#D6D2C9]">
+            <div className="flex items-start gap-2">
+              <Info className="w-4 h-4 text-[#E5A93C] shrink-0 mt-0.5" aria-hidden="true" />
+              <div className="space-y-1.5">
+                <p className="font-medium text-[#F5F3EE]">{t('studio.driveNamingHeading')}</p>
+                <p className="text-[#A39E93] leading-relaxed">{t('studio.driveNamingBody')}</p>
+                <p className="font-mono-tabular text-[11px] text-[#F3C669]">
+                  EP01_audio.mp3 · EP01_video.mp4 · EP02_audio.mp3
+                </p>
+                <p className="text-[11px] text-[#8A857B] leading-relaxed">
+                  {t('studio.driveLimitsNotice')}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {mode === 'direct' ? (
+            <>
+              <div className="space-y-1.5">
+                <label
+                  htmlFor="direct-links-textarea"
+                  className="text-xs font-medium text-[#A39E93] block"
+                >
+                  Episode Links (one per line)
+                </label>
+                <textarea
+                  id="direct-links-textarea"
+                  data-testid="direct-links-textarea"
+                  rows={5}
+                  value={directLinksInput}
+                  onChange={(e) => setDirectLinksInput(e.target.value)}
+                  placeholder={`EP01 | Episode Title | https://drive.google.com/file/d/...\nEP02 | Next Chapter | https://cdn.yourdomain.com/ep02.mp3`}
+                  disabled={importing}
+                  className="w-full p-3.5 rounded-xl bg-[#0B0B0E] border border-white/15 text-xs font-mono text-[#F5F3EE] placeholder:text-[#66625B] focus:outline-none focus:border-[#E5A93C]"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label
+                  htmlFor="direct-default-price"
+                  className="text-xs font-medium text-[#A39E93] block"
+                >
+                  Default Coin Price per Imported Episode (0 = Free)
+                </label>
+                <input
+                  id="direct-default-price"
+                  type="number"
+                  min={0}
+                  max={100000}
+                  value={defaultPriceCoins}
+                  onChange={(e) => setDefaultPriceCoins(e.target.value)}
+                  disabled={importing}
+                  className="w-36 h-10 px-3 rounded-xl bg-[#0B0B0E] border border-white/15 text-sm text-[#F5F3EE] focus:outline-none focus:border-[#E5A93C]"
+                />
+              </div>
+            </>
+          ) : (
+            <div className="space-y-1.5">
+              <label
+                htmlFor="drive-folder-input"
+                className="text-xs font-medium text-[#A39E93] block"
+              >
+                {t('studio.driveFolderLabel')}
+              </label>
+              <input
+                id="drive-folder-input"
+                data-testid="drive-folder-input"
+                type="text"
+                value={folderInput}
+                onChange={(e) => setFolderInput(e.target.value)}
+                placeholder="1AbCdEfGhIjKlMnOpQrStUvWxYz or https://drive.google.com/drive/folders/..."
+                disabled={importing}
+                className="w-full h-11 px-3.5 rounded-xl bg-[#0B0B0E] border border-white/15 text-sm text-[#F5F3EE] placeholder:text-[#66625B] focus:outline-none focus:border-[#E5A93C]"
+              />
+            </div>
+          )}
 
           {errorMsg && (
             <div
@@ -254,10 +424,16 @@ export const DriveFolderImportModal: React.FC<DriveFolderImportModalProps> = ({
             >
               {importing ? (
                 <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
+              ) : mode === 'direct' ? (
+                <Link2 className="w-4 h-4" aria-hidden="true" />
               ) : (
                 <FolderInput className="w-4 h-4" aria-hidden="true" />
               )}
-              {importing ? t('studio.driveImporting') : t('studio.driveImportRunBtn')}
+              {importing
+                ? t('studio.driveImporting')
+                : mode === 'direct'
+                  ? 'Import Episodes'
+                  : t('studio.driveImportRunBtn')}
             </button>
           </div>
         </form>

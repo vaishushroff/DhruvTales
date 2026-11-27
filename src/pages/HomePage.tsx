@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowRight, ChevronLeft, ChevronRight, Play, RefreshCw, Sparkles } from 'lucide-react';
+import { ArrowRight, ChevronLeft, ChevronRight, Play, RefreshCw } from 'lucide-react';
 import { StoryArtwork } from '../components/StoryArtwork';
 import { StoryCarousel } from '../components/StoryCarousel';
 import { useAudioPlayer } from '../hooks/useAudioPlayer';
@@ -36,7 +36,6 @@ export const HomePage: React.FC = () => {
     episodes,
     history,
     siteSettings,
-    catalogSource,
     catalogLoading,
     catalogError,
     refreshCatalog,
@@ -386,7 +385,7 @@ export const HomePage: React.FC = () => {
         );
       })}
 
-      {/* Editable Site Footer + Legal Links + Real vs Simulated Transparency */}
+      {/* Editable Site Footer + Legal Links */}
       <footer
         data-testid="home-site-footer"
         className="border-t border-white/[0.08] pt-8 pb-4 space-y-6"
@@ -440,32 +439,8 @@ export const HomePage: React.FC = () => {
             <p className="text-[11px] text-[#7E796F]">
               {lang === 'hi'
                 ? siteSettings.footer.copyrightHi || siteSettings.footer.copyrightEn
-                : siteSettings.footer.copyrightEn}{' '}
-              ·{' '}
-              {catalogSource === 'firestore'
-                ? t('home.catalogSourceFirestore')
-                : t('home.catalogSourceLocal')}
+                : siteSettings.footer.copyrightEn}
             </p>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs shrink-0 max-w-xl">
-            <div className="rounded-xl bg-[var(--bg-surface,#141418)] border border-white/[0.08] p-4 space-y-1.5">
-              <p className="font-semibold text-[var(--accent-gold,#E5A93C)]">
-                {t('common.realBadge')}
-              </p>
-              <p className="text-[#A39E93] leading-relaxed">
-                Firebase Auth, Cloud Firestore catalog &amp; live siteSettings, RBAC security rules, read-only client wallets &amp; immutable coinTransactions ledger, server-side /api/admin/* CMS &amp; analytics, soft-delete + restore with auditLogs, and single-device session protection.
-              </p>
-            </div>
-            <div className="rounded-xl bg-[var(--bg-surface,#141418)] border border-white/[0.08] p-4 space-y-1.5">
-              <p className="font-semibold text-[#A39E93] flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-[#A39E93]" aria-hidden="true" />
-                {t('common.simulatedBadge')}
-              </p>
-              <p className="text-[#A39E93] leading-relaxed">
-                DemoMediaProvider fallback audio &amp; video playback, DriveMediaProvider signed proxy (testing/low-traffic), and MockPaymentProvider demo coin checkout (no real charges).
-              </p>
-            </div>
           </div>
         </div>
       </footer>

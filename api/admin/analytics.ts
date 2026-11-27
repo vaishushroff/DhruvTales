@@ -25,6 +25,7 @@ import {
   ServerConfigError,
   verifyFirebaseBearerToken,
 } from '../_lib/firebaseAdmin';
+import { verifyAdminActor } from '../_lib/adminAuth';
 import {
   isValidFirestoreDocId,
   mapFirestoreCoinTransaction,
@@ -34,19 +35,9 @@ import {
   timestampToMs,
 } from '../_lib/firestoreModels';
 
-const BOOTSTRAP_ADMIN_EMAIL = 'vaishushroff@gmail.com';
 const PAGE_SIZE = 500;
 const MAX_PAGES = 20; // Hard cap: 10,000 docs per collection per request
 
-async function isAdminActor(uid: string, email: string | undefined): Promise<boolean> {
-  if (email && email.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL) return true;
-  const db = getAdminDb();
-  const [adminSnap, userSnap] = await Promise.all([
-    db.collection('admins').doc(uid).get(),
-    db.collection('users').doc(uid).get(),
-  ]);
-  return adminSnap.exists || userSnap.data()?.role === 'admin';
-}
 
 function getQueryString(req: VercelRequest, key: string): string {
   const raw = req.query?.[key];
@@ -176,8 +167,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     const decoded = await verifyFirebaseBearerToken(req.headers.authorization, {
       required: true,
     });
-    const isAdmin = await isAdminActor(decoded!.uid, decoded!.email);
-    if (!isAdmin) {
+    const adminAccess = await verifyAdminActor(decoded!);
+    if (!adminAccess.allowed) {
       res.status(403).json({
         code: 'admin_only',
         error: 'Only Administrators can access platform analytics.',

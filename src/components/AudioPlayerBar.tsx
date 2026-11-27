@@ -568,9 +568,9 @@ export const AudioPlayerBar: React.FC = () => {
                     {activeMediaRef.provider} · {activeMediaRef.type} · {activeMediaRef.id}
                   </span>
                 </div>
-                {activeFormat === 'audio' && (
+                {activeFormat === 'audio' && mediaResolution?.label && (
                   <p className="text-[11px] text-[#9B968B]">
-                    {mediaResolution?.label || t('player.demoAudioNotice')}
+                    {mediaResolution.label}
                   </p>
                 )}
               </div>

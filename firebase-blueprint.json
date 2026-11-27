@@ -13,6 +13,7 @@
         "preferredLanguage": { "type": "string", "minLength": 2, "maxLength": 10 },
         "preferredFormat": { "type": "string", "enum": ["audio", "video"] },
         "role": { "type": "string", "enum": ["user", "creator", "admin"] },
+        "admin": { "type": "boolean", "description": "Admin-only boolean privilege flag indicating administrator access." },
         "isDisabled": { "type": "boolean" },
         "warningCount": { "type": "number", "description": "Server-only concurrent device login warning counter (auto-banned at 3)." },
         "banned": { "type": "boolean", "description": "Server-only account ban flag enforced across all /api routes." },
@@ -20,6 +21,7 @@
         "banReason": { "type": "string", "maxLength": 300 },
         "activeDevice": { "type": "object", "description": "Server-only single active browser device record (deviceId, deviceInfo, registeredAt, lastSeen)." },
         "lastSeen": { "type": "string", "format": "date-time" },
+        "subscriptionTier": { "type": "string", "maxLength": 32, "description": "Optional legacy subscription tier retained for backwards compatibility with pre-wallet user documents." },
         "avatarInitials": { "type": "string", "minLength": 1, "maxLength": 4 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
@@ -132,6 +134,7 @@
         "descriptionHi": { "type": "string", "maxLength": 600 },
         "durationSec": { "type": "number" },
         "priceCoins": { "type": "number", "description": "Coin unlock price (0 = free). Set once by creator on creation; editable anytime by Admin." },
+        "accessTier": { "type": "string", "maxLength": 32, "description": "Optional legacy access tier retained for backwards compatibility with pre-wallet episode documents." },
         "mediaRef": { "type": "object", "description": "Primary audio mediaRef { provider, id, type }" },
         "audioRef": { "type": "object", "description": "Explicit audio MediaRef { provider, id, type }" },
         "videoMediaRef": { "type": "object", "description": "Optional video MediaRef { provider, id, type } for Audio/Video switching" },
@@ -150,7 +153,7 @@
     },
     "CoinWallet": {
       "title": "CoinWallet",
-      "description": "Server-authoritative coin wallet per user (read-only for clients; written only by Vercel /api/coins/* using Firebase Admin SDK).",
+      "description": "Server-authoritative coin wallet per user (read-only for regular users; written by /api/coins/* Admin SDK or verified Admins during direct fallback adjustments).",
       "type": "object",
       "properties": {
         "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
@@ -163,7 +166,7 @@
     },
     "CoinTransaction": {
       "title": "CoinTransaction",
-      "description": "Immutable coin ledger entry created exclusively by server-side Admin SDK routes.",
+      "description": "Immutable append-only coin ledger entry created by server-side Admin SDK routes or verified Admins for admin_adjust/bonus/refund entries.",
       "type": "object",
       "properties": {
         "id": { "type": "string", "minLength": 1, "maxLength": 128 },

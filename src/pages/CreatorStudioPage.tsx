@@ -2023,17 +2023,19 @@ export const CreatorStudioPage: React.FC = () => {
         </div>
       )}
 
-      {/* GOOGLE DRIVE FOLDER IMPORT MODAL */}
+      {/* GOOGLE DRIVE / DIRECT BATCH EPISODE IMPORT MODAL */}
       <DriveFolderImportModal
         open={driveImportOpen}
         story={selectedStory}
+        existingEpisodes={selectedStoryEpisodes}
+        actorUid={profile?.uid}
         onClose={() => setDriveImportOpen(false)}
         onImportComplete={async (res) => {
           await refreshCatalog();
           await loadStudioData();
           setBanner({
             type: 'success',
-            text: `Imported ${res.created.length} draft episode(s) from Google Drive (${res.skipped.length} skipped, ${res.invalid.length} invalid).`,
+            text: `Imported ${res.created.length} episode(s) (${res.skipped.length} skipped, ${res.invalid.length} invalid).`,
           });
         }}
       />

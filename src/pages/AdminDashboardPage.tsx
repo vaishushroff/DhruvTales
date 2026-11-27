@@ -47,6 +47,7 @@ import {
   adminSoftDeleteStory,
 } from '../services/firebase/adminCmsService';
 import {
+  adminAdjustWalletDirect,
   adminApplyUserSessionActionDirect,
   adminChangeUserRole,
   adminDeleteCategory,
@@ -593,17 +594,25 @@ export const AdminDashboardPage: React.FC = () => {
     setBusyId('wallet-adjust');
     setFeedback(null);
     try {
-      const res = await adminAdjustWalletViaApi(firebaseUser, {
+      const adjustPayload = {
         targetUid: adjTargetUid,
         type: adjType,
         amount: parsedAmount,
         note: adjNote.trim(),
-      });
+      };
+      const apiRes = await adminAdjustWalletViaApi(firebaseUser, adjustPayload);
+      const finalWallet = apiRes.usedServerApi
+        ? apiRes.wallet
+        : profile
+          ? (await adminAdjustWalletDirect(profile, adjustPayload)).wallet
+          : (() => {
+              throw new Error(apiRes.reason);
+            })();
       await Promise.all([loadBundle(), refreshWallet()]);
       setAdjNote('');
       setFeedback({
         type: 'success',
-        text: `Adjusted wallet (${parsedAmount > 0 ? `+${parsedAmount}` : parsedAmount} coins). New balance: ${res.wallet.balance} coins.`,
+        text: `Adjusted wallet (${parsedAmount > 0 ? `+${parsedAmount}` : parsedAmount} coins). New balance: ${finalWallet.balance} coins.`,
       });
     } catch (err) {
       setFeedback({

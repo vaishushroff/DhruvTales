@@ -69,6 +69,7 @@ export interface UserProfile {
   preferredLanguage: LanguageCode;
   preferredFormat?: PlaybackFormat;
   role: UserRole;
+  admin?: boolean;
   isDisabled?: boolean;
   /** Server-only single-device enforcement fields (never client-editable). */
   warningCount?: number;

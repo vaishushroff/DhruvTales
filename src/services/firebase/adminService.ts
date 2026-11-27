@@ -4,12 +4,17 @@ import {
   doc,
   getDoc,
   getDocs,
+  runTransaction,
   serverTimestamp,
   setDoc,
   Timestamp,
   updateDoc,
   writeBatch,
 } from 'firebase/firestore';
+import {
+  computeAdminWalletAdjustment,
+  createEmptyWallet,
+} from '../../../api/_lib/coinEngine';
 import {
   buildAdminSessionFirestoreUpdate,
   evaluateAdminSessionAction,
@@ -20,6 +25,8 @@ import type {
   AuditLogEntry,
   Category,
   CoinPackage,
+  CoinTransaction,
+  CoinTransactionType,
   CoinWallet,
   ContentLanguage,
   Creator,
@@ -336,6 +343,7 @@ export async function adminChangeUserRole(
   try {
     await updateDoc(doc(db, 'users', targetUser.uid), {
       role: newRole,
+      admin: newRole === 'admin',
       updatedAt: serverTimestamp(),
     });
 
@@ -461,6 +469,98 @@ export async function adminApplyUserSessionActionDirect(
     return { summary, auditLog };
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `users/${targetUser.uid}`);
+  }
+}
+
+/**
+ * Direct Firestore Admin fallback for coin wallet adjustments, bonuses, and refunds
+ * when hosted on static-only infrastructure (e.g. Cloudflare Workers Static Assets)
+ * without a Node API server. Protected strictly by `isAdmin()` in `firestore.rules`.
+ */
+export async function adminAdjustWalletDirect(
+  actor: UserProfile,
+  payload: {
+    targetUid: string;
+    type: Extract<CoinTransactionType, 'admin_adjust' | 'bonus' | 'refund'>;
+    amount: number;
+    note: string;
+    episodeId?: string | null;
+    storyId?: string | null;
+  }
+): Promise<{ wallet: CoinWallet; transaction: CoinTransaction }> {
+  const walletRef = doc(db, 'wallets', payload.targetUid);
+  const txId = `tx-adm-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+  const txRef = doc(db, 'coinTransactions', txId);
+
+  try {
+    const result = await runTransaction(db, async (tx) => {
+      const snap = await tx.get(walletRef);
+      const raw = snap.exists() ? (snap.data() as Record<string, unknown>) : null;
+      const currentWallet: CoinWallet = raw
+        ? {
+            uid: String(raw.uid ?? payload.targetUid),
+            balance: Number(raw.balance ?? 0),
+            lifetimePurchased: Number(raw.lifetimePurchased ?? 0),
+            lifetimeSpent: Number(raw.lifetimeSpent ?? 0),
+            updatedAt: tsToMs(raw.updatedAt),
+          }
+        : createEmptyWallet(payload.targetUid);
+
+      const computed = computeAdminWalletAdjustment({
+        wallet: currentWallet,
+        type: payload.type,
+        amount: payload.amount,
+        note: payload.note,
+        txId,
+        episodeId: payload.episodeId ?? null,
+        storyId: payload.storyId ?? null,
+      });
+
+      if (!computed.ok || !computed.nextWallet || !computed.transaction) {
+        throw new Error(computed.error || 'Invalid coin adjustment.');
+      }
+
+      tx.set(walletRef, {
+        uid: payload.targetUid,
+        balance: computed.nextWallet.balance,
+        lifetimePurchased: computed.nextWallet.lifetimePurchased,
+        lifetimeSpent: computed.nextWallet.lifetimeSpent,
+        updatedAt: serverTimestamp(),
+      });
+
+      tx.set(txRef, {
+        id: computed.transaction.id,
+        uid: payload.targetUid,
+        type: computed.transaction.type,
+        amount: computed.transaction.amount,
+        balanceAfter: computed.transaction.balanceAfter,
+        episodeId: computed.transaction.episodeId ?? null,
+        storyId: computed.transaction.storyId ?? null,
+        creatorId: computed.transaction.creatorId ?? null,
+        note: computed.transaction.note,
+        createdAt: serverTimestamp(),
+      });
+
+      return {
+        wallet: computed.nextWallet,
+        transaction: computed.transaction,
+      };
+    });
+
+    await writeAuditLog(
+      actor,
+      'wallet_admin_adjust',
+      'wallets',
+      payload.targetUid,
+      `Adjusted wallet (${payload.type}) by ${payload.amount > 0 ? `+${payload.amount}` : payload.amount} coins. Balance: ${result.wallet.balance}. Note: ${payload.note.trim().slice(0, 180)}`
+    );
+
+    return result;
+  } catch (error) {
+    if (error instanceof Error && !error.message.includes('permission-denied') && !error.message.includes('Missing or insufficient permissions')) {
+      throw error;
+    }
+    handleFirestoreError(error, OperationType.WRITE, `wallets/${payload.targetUid}`);
   }
 }
 

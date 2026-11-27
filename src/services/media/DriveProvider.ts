@@ -1,7 +1,16 @@
-import type { Episode, MediaRef, UserProfile } from '../../types';
+import { doc, serverTimestamp, updateDoc, writeBatch } from 'firebase/firestore';
+import type { Episode, MediaRef, Story, UserProfile } from '../../types';
+import { sanitizeSafeUrl } from '../../utils/validation';
 import { canAccessEpisode } from '../access/episodeAccess';
 import { resolveApiUrl } from '../api/apiClient';
-import { auth } from '../firebase/config';
+import { auth, db, handleFirestoreError, OperationType } from '../firebase/config';
+import { slugify } from '../studio/studioAnalytics';
+import {
+  buildDirectDrivePlaybackUrl,
+  extractDriveFileId,
+  isStaticHostApiUnavailable,
+  parseBatchEpisodeLines,
+} from './driveFallback';
 import type {
   MediaPlaybackResolution,
   MediaProvider,
@@ -62,6 +71,7 @@ export interface DriveFolderImportResult {
   created: DriveImportCreatedItem[];
   skipped: DriveImportSkippedItem[];
   invalid: DriveImportInvalidItem[];
+  mode?: 'server' | 'direct-firestore';
 }
 
 interface ApiErrorPayload {
@@ -105,12 +115,12 @@ export function mapDriveApiError(status: number, payload: ApiErrorPayload | null
         'Google Drive bandwidth or API quota has been exceeded. Please try again later.'
     );
   }
-  if (code === 'server_not_configured' || status === 503) {
+  if (code === 'server_not_configured' || status === 503 || status === 405) {
     return new DriveMediaError(
       'server_not_configured',
-      503,
+      status || 503,
       serverMsg ||
-        'Google Drive media server environment variables are not configured yet on the backend server.'
+        'Backend Google Drive API is not available on this host. Use Direct Batch Import or deploy the Node API server.'
     );
   }
   if (code === 'invalid_folder_id') {
@@ -164,19 +174,52 @@ async function getOptionalFirebaseIdToken(): Promise<string | null> {
   }
 }
 
+function buildDirectDriveFallbackResolution(mediaRef: MediaRef): MediaPlaybackResolution {
+  const rawId = mediaRef.id.trim();
+  const driveFileId = extractDriveFileId(rawId);
+  if (driveFileId) {
+    return {
+      url: buildDirectDrivePlaybackUrl(driveFileId),
+      mimeType: mediaRef.type === 'video' ? 'video/mp4' : 'audio/mpeg',
+      provider: 'drive',
+      isSimulatedMedia: false,
+      isProductionProtected: false,
+      label: 'Google Drive (Direct shared playback)',
+    };
+  }
+
+  const safeUrl = sanitizeSafeUrl(rawId);
+  if (safeUrl) {
+    return {
+      url: safeUrl,
+      mimeType: mediaRef.type === 'video' ? 'video/mp4' : 'audio/mpeg',
+      provider: 'drive',
+      isSimulatedMedia: false,
+      isProductionProtected: false,
+      label: 'Direct HTTPS Media Stream',
+    };
+  }
+
+  throw new DriveMediaError(
+    'file_not_found',
+    400,
+    'This episode does not have a valid Google Drive file ID or direct HTTPS media URL.'
+  );
+}
+
 /**
  * Google Drive MediaProvider adapter.
  *
- * Security model:
- * - Frontend stores ONLY `{ provider: "drive", id: <driveFileId>, type: "audio"|"video" }`.
- * - Never receives or constructs a public Drive link.
- * - Playback calls POST /api/media/authorize with the user's Firebase ID token and
- *   receives a short-lived (5-minute) HMAC-signed `/api/media/stream?token=...` URL.
- * - Intended for testing and low-traffic streaming only (not production-grade DRM).
+ * Works seamlessly on BOTH full-stack and static-only hosts:
+ * - On Node/serverless hosts (Vercel, Render, Cloud Run, local dev): calls POST /api/media/authorize
+ *   to obtain a short-lived HMAC-signed `/api/media/stream?token=...` URL.
+ * - On static-only hosts (Cloudflare Workers Static Assets, Netlify) where `/api/*` returns 404/405:
+ *   automatically falls back to direct shared Google Drive playback (`uc?export=download&id=...`)
+ *   or direct HTTPS URLs so playback works everywhere with zero 405 errors.
  */
 export class DriveMediaProvider implements MediaProvider {
   readonly providerType = 'drive' as const;
-  readonly displayName = 'Google Drive Media Provider (Testing / Low Traffic)';
+  readonly displayName = 'Google Drive Media Provider';
   readonly isImplemented = true;
   readonly isProductionProtected = false;
 
@@ -221,11 +264,8 @@ export class DriveMediaProvider implements MediaProvider {
         }),
       });
     } catch {
-      throw new DriveMediaError(
-        'network_error',
-        0,
-        'Could not reach /api/media/authorize. Check your network connection or backend API server.'
-      );
+      // Network/unreachable backend -> use direct shared Google Drive playback fallback
+      return buildDirectDriveFallbackResolution(mediaRef);
     }
 
     const payload = await parseJsonSafe<{
@@ -238,22 +278,19 @@ export class DriveMediaProvider implements MediaProvider {
     }>(response);
 
     if (!response.ok) {
-      if (!payload && response.status === 404) {
-        throw new DriveMediaError(
-          'server_not_configured',
-          404,
-          'Media authorization API (/api/media/authorize) is unavailable on this host. Configure VITE_API_BASE_URL or run the backend API server.'
-        );
+      // Static hosting (404/405/non-JSON) or server not configured (503) -> fall back to direct shared playback
+      if (
+        isStaticHostApiUnavailable(response.status, Boolean(payload)) ||
+        response.status === 503 ||
+        payload?.code === 'server_not_configured'
+      ) {
+        return buildDirectDriveFallbackResolution(mediaRef);
       }
       throw mapDriveApiError(response.status, payload);
     }
 
     if (!payload?.url || !payload.url.startsWith('/api/media/stream')) {
-      throw new DriveMediaError(
-        'unknown_error',
-        502,
-        'Media authorization server returned an unexpected response.'
-      );
+      return buildDirectDriveFallbackResolution(mediaRef);
     }
 
     return {
@@ -264,7 +301,7 @@ export class DriveMediaProvider implements MediaProvider {
       provider: 'drive',
       isSimulatedMedia: false,
       isProductionProtected: false,
-      label: 'Google Drive (Signed stream proxy · Testing / low traffic only)',
+      label: 'Google Drive (Signed stream proxy)',
     };
   }
 
@@ -272,7 +309,7 @@ export class DriveMediaProvider implements MediaProvider {
     throw new DriveMediaError(
       'unknown_error',
       501,
-      'Direct browser uploads to Google Drive are disabled. Upload files named EP01_audio.mp3 / EP01_video.mp4 to your shared Drive folder and use "Import from Drive folder" in Creator Studio.'
+      'Paste a shared Google Drive file link/ID or use Bulk Import in Creator Studio.'
     );
   }
 }
@@ -320,20 +357,20 @@ export async function importEpisodesFromDriveFolder(
     });
   } catch {
     throw new DriveMediaError(
-      'network_error',
+      'server_not_configured',
       0,
-      'Could not reach /api/media/import-folder. Check your network connection or backend API server.'
+      'Drive folder scan API (/api/media/import-folder) is unavailable on this host. Use Direct Batch Links below to import episodes directly into Firestore.'
     );
   }
 
   const payload = await parseJsonSafe<DriveFolderImportResult & ApiErrorPayload>(response);
 
   if (!response.ok) {
-    if (!payload && response.status === 404) {
+    if (isStaticHostApiUnavailable(response.status, Boolean(payload))) {
       throw new DriveMediaError(
         'server_not_configured',
-        404,
-        'Drive folder import API (/api/media/import-folder) is unavailable on this host. Configure VITE_API_BASE_URL or run the backend API server.'
+        response.status,
+        'Drive folder scan API (/api/media/import-folder) is not running on this static host. Use Direct Batch Links below—it saves episodes directly to Firestore with no backend server required.'
       );
     }
     throw mapDriveApiError(response.status, payload);
@@ -353,6 +390,117 @@ export async function importEpisodesFromDriveFolder(
     created: payload.created,
     skipped: payload.skipped ?? [],
     invalid: payload.invalid ?? [],
+    mode: 'server',
+  };
+}
+
+/**
+ * Direct Firestore batch importer that works on ANY host (including Cloudflare Workers Static Assets
+ * and Netlify with zero backend server). Parses pasted Google Drive file links/IDs or direct HTTPS
+ * MP3/MP4 URLs and creates episodes atomically via Firestore batch write.
+ */
+export async function importEpisodesFromDirectLinks(params: {
+  story: Story;
+  existingEpisodes: Episode[];
+  actorUid: string;
+  rawLines: string;
+  defaultPriceCoins?: number;
+}): Promise<DriveFolderImportResult> {
+  const existingNumbers = params.existingEpisodes
+    .filter((ep) => !ep.isDeleted)
+    .map((ep) => ep.episodeNumber);
+  const plan = parseBatchEpisodeLines(params.rawLines, existingNumbers);
+
+  if (plan.totalLines === 0) {
+    throw new DriveMediaError(
+      'invalid_folder_id',
+      400,
+      'Paste at least one Google Drive file link/ID or direct https:// audio/video URL.'
+    );
+  }
+
+  const created: DriveImportCreatedItem[] = [];
+  const priceCoins = Math.max(
+    0,
+    Math.min(100_000, Math.floor(params.defaultPriceCoins ?? 0))
+  );
+  const ownerUid = params.story.creatorOwnerUid || params.actorUid;
+
+  if (plan.groups.length > 0) {
+    try {
+      const batch = writeBatch(db);
+      const stamp = Date.now().toString(36);
+      const storySlug = slugify(params.story.id).slice(0, 20);
+      let anyNewVideo = false;
+
+      for (const group of plan.groups) {
+        const epId = `ep-${storySlug}-${group.episodeNumber}-${stamp}`.slice(0, 80);
+        const epPayload: Record<string, unknown> = {
+          id: epId,
+          storyId: params.story.id,
+          creatorOwnerUid: ownerUid,
+          episodeNumber: group.episodeNumber,
+          title: group.title.slice(0, 160),
+          titleHi: group.title.slice(0, 160),
+          description: '',
+          descriptionHi: '',
+          durationSec: 300,
+          priceCoins,
+          mediaRef: group.audioRef,
+          audioRef: group.audioRef,
+          isEnding: false,
+          publishedAt: serverTimestamp(),
+          createdAt: serverTimestamp(),
+        };
+
+        if (group.videoMediaRef) {
+          epPayload.videoMediaRef = group.videoMediaRef;
+          anyNewVideo = true;
+        }
+
+        batch.set(doc(db, 'episodes', epId), epPayload);
+        created.push({
+          episodeId: epId,
+          episodeNumber: group.episodeNumber,
+          title: group.title,
+          hasAudio: true,
+          hasVideo: Boolean(group.videoMediaRef),
+          files: group.sources,
+        });
+      }
+
+      await batch.commit();
+
+      const totalEpisodesAfter = params.existingEpisodes.filter((e) => !e.isDeleted).length + created.length;
+      const storyHasAnyVideo =
+        anyNewVideo || params.existingEpisodes.some((e) => !e.isDeleted && Boolean(e.videoMediaRef));
+
+      await updateDoc(doc(db, 'stories', params.story.id), {
+        episodeCount: totalEpisodesAfter,
+        format: storyHasAnyVideo ? 'hybrid' : params.story.format,
+        updatedAt: serverTimestamp(),
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `episodes(batch:${params.story.id})`);
+    }
+  }
+
+  return {
+    storyId: params.story.id,
+    totalFilesScanned: plan.totalLines,
+    created,
+    skipped: plan.skipped.map((s) => ({
+      fileId: `line-${s.lineNumber}`,
+      fileName: `Line ${s.lineNumber}`,
+      episodeNumber: s.episodeNumber,
+      reason: s.reason,
+    })),
+    invalid: plan.invalid.map((inv) => ({
+      fileId: `line-${inv.lineNumber}`,
+      fileName: `Line ${inv.lineNumber}: ${inv.rawLine.slice(0, 48)}`,
+      reason: inv.reason,
+    })),
+    mode: 'direct-firestore',
   };
 }
 
