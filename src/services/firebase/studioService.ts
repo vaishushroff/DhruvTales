@@ -1,6 +1,7 @@
 import {
   collection,
   deleteDoc,
+  deleteField,
   doc,
   getDoc,
   getDocs,
@@ -28,7 +29,7 @@ import type {
   UserRole,
 } from '../../types';
 import { validateOptionalUrl } from '../../utils/validation';
-import { slugify } from '../studio/studioAnalytics';
+import { buildEpisodeEditFields, slugify } from '../studio/studioAnalytics';
 import { db, handleFirestoreError, OperationType } from './config';
 
 function tsToIso(val: unknown): string {
@@ -337,7 +338,7 @@ export async function saveCreatorEpisodeToFirestore(
     if (isEdit) {
       // Creators CANNOT change priceCoins after initial upload (enforced here AND in firestore.rules)
       const existingSnap = await getDoc(ref);
-      const existingData = existingSnap.data();
+      const existingData = existingSnap.data() as Record<string, unknown> | undefined;
       const existingPrice =
         typeof existingData?.priceCoins === 'number'
           ? Math.max(0, Math.floor(existingData.priceCoins))
@@ -347,15 +348,25 @@ export async function saveCreatorEpisodeToFirestore(
         payload.priceCoins = existingPrice;
       }
 
-      const fullDoc: Record<string, unknown> = {
-        id,
-        storyId: input.storyId,
-        creatorOwnerUid: existingData?.creatorOwnerUid ?? ownerUid,
-        publishedAt: existingData?.publishedAt ?? serverTimestamp(),
-        createdAt: existingData?.createdAt ?? serverTimestamp(),
-        ...payload,
-      };
-      await setDoc(ref, fullDoc);
+      if (existingSnap.exists() && existingData) {
+        // Use updateDoc so immutable/soft-delete fields (createdAt, publishedAt, isDeleted, deletedAt, deletedByUid) stay intact
+        const updateFields = buildEpisodeEditFields({
+          payload,
+          existingData,
+          deleteMarker: deleteField(),
+        });
+        await updateDoc(ref, updateFields);
+      } else {
+        const fullDoc: Record<string, unknown> = {
+          id,
+          storyId: input.storyId,
+          creatorOwnerUid: ownerUid,
+          publishedAt: serverTimestamp(),
+          createdAt: serverTimestamp(),
+          ...payload,
+        };
+        await setDoc(ref, fullDoc);
+      }
     } else {
       await setDoc(ref, {
         id,

@@ -8,4 +8,6 @@ dev-dist
 *.json.key
 *service-account*.json
 .playwright-cli
+.wrangler
+.vercel
 docs

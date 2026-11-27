@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildEpisodeEditFields,
   canManageStory,
   computeCreatorStats,
   computeStoryAnalytics,
@@ -193,4 +194,42 @@ test('validateChoicePoint catches self-links, missing labels, and invalid target
     ) ?? '',
     /same episode/i
   );
+});
+
+test('buildEpisodeEditFields updates only creator-allowed keys and deletes cleared optional fields without touching soft-delete metadata', () => {
+  const DELETE_SENTINEL = Symbol('deleteField');
+  const fields = buildEpisodeEditFields({
+    payload: {
+      episodeNumber: 2,
+      title: 'Updated Ep',
+      titleHi: 'अपडेटेड एपिसोड',
+      description: 'New description',
+      descriptionHi: 'नया विवरण',
+      durationSec: 240,
+      priceCoins: 10,
+      mediaRef: { provider: 'demo', id: 'local-audio-2', type: 'audio' },
+      audioRef: { provider: 'demo', id: 'local-audio-2', type: 'audio' },
+      isEnding: false,
+    },
+    existingData: {
+      id: 'ep_2',
+      storyId: 'st_1',
+      creatorOwnerUid: 'u_creator_a',
+      isDeleted: false,
+      deletedAt: null,
+      deletedByUid: null,
+      videoMediaRef: { provider: 'demo', id: 'local-video-old', type: 'video' },
+      createdAt: 'ts',
+      publishedAt: 'ts',
+    },
+    deleteMarker: DELETE_SENTINEL,
+  });
+
+  assert.equal('isDeleted' in fields, false);
+  assert.equal('deletedAt' in fields, false);
+  assert.equal('deletedByUid' in fields, false);
+  assert.equal('createdAt' in fields, false);
+  assert.equal('publishedAt' in fields, false);
+  assert.equal(fields.videoMediaRef, DELETE_SENTINEL);
+  assert.equal('choicePoint' in fields, false);
 });

@@ -180,6 +180,7 @@ export const CreatorStudioPage: React.FC = () => {
   const [studioPreviewAspect, setStudioPreviewAspect] = useState<VideoAspectFormat>('9:16');
   const [studioPreviewUrl, setStudioPreviewUrl] = useState<string | null>(null);
   const [studioPreviewLoading, setStudioPreviewLoading] = useState(false);
+  const audioInputRef = useRef<HTMLInputElement | null>(null);
   const videoInputRef = useRef<HTMLInputElement | null>(null);
 
   // Google Drive folder import modal
@@ -606,6 +607,9 @@ export const CreatorStudioPage: React.FC = () => {
       });
     } finally {
       setUploadingSlot(null);
+      if (audioInputRef.current) {
+        audioInputRef.current.value = '';
+      }
     }
   };
 
@@ -1613,8 +1617,10 @@ export const CreatorStudioPage: React.FC = () => {
                   <Upload className="w-3.5 h-3.5 text-[#E5A93C]" aria-hidden="true" />
                   {uploadingSlot === 'audio' ? 'Uploading...' : t('studio.uploadAudioBtn')}
                   <input
+                    ref={audioInputRef}
                     type="file"
                     accept="audio/*"
+                    disabled={uploadingSlot === 'audio'}
                     className="sr-only"
                     onChange={(e) => void handleUploadMediaSlot('audio', e.target.files?.[0])}
                   />

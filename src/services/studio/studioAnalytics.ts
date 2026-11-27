@@ -208,3 +208,37 @@ export function slugify(input: string): string {
     .replace(/^-+|-+$/g, '')
     .slice(0, 64) || `item-${Date.now()}`;
 }
+
+export function buildEpisodeEditFields<TDeleteMarker>(params: {
+  payload: Record<string, unknown>;
+  existingData: Record<string, unknown>;
+  deleteMarker: TDeleteMarker;
+}): Record<string, unknown> {
+  const { payload, existingData, deleteMarker } = params;
+  const updateFields: Record<string, unknown> = {
+    episodeNumber: payload.episodeNumber,
+    title: payload.title,
+    titleHi: payload.titleHi,
+    description: payload.description,
+    descriptionHi: payload.descriptionHi,
+    durationSec: payload.durationSec,
+    priceCoins: payload.priceCoins,
+    mediaRef: payload.mediaRef,
+    audioRef: payload.audioRef,
+    isEnding: payload.isEnding,
+  };
+
+  if (payload.videoMediaRef !== undefined) {
+    updateFields.videoMediaRef = payload.videoMediaRef;
+  } else if (existingData.videoMediaRef !== undefined) {
+    updateFields.videoMediaRef = deleteMarker;
+  }
+
+  if (payload.choicePoint !== undefined) {
+    updateFields.choicePoint = payload.choicePoint;
+  } else if (existingData.choicePoint !== undefined) {
+    updateFields.choicePoint = deleteMarker;
+  }
+
+  return updateFields;
+}

@@ -19,4 +19,6 @@ gdrive-*.json
 key.json
 secrets/*.json
 .vercel
+.wrangler
+dev-dist/
 
