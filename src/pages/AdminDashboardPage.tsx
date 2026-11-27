@@ -47,6 +47,7 @@ import {
   adminSoftDeleteStory,
 } from '../services/firebase/adminCmsService';
 import {
+  adminApplyUserSessionActionDirect,
   adminChangeUserRole,
   adminDeleteCategory,
   adminDeleteCoinPackage,
@@ -313,7 +314,7 @@ export const AdminDashboardPage: React.FC = () => {
     action: AdminSessionActionType,
     options?: { warningCount?: number; reason?: string }
   ) => {
-    if (!firebaseUser) return;
+    if (!firebaseUser || !profile) return;
     setBusyId(`session-${action}-${target.uid}`);
     setFeedback(null);
     try {
@@ -324,9 +325,11 @@ export const AdminDashboardPage: React.FC = () => {
         reason: options?.reason,
       });
       if (!res.usedServerApi) {
+        const directRes = await adminApplyUserSessionActionDirect(profile, target, action, options);
+        await loadBundle();
         setFeedback({
-          type: 'error',
-          text: res.error || t('admin.sessionApiUnavailable'),
+          type: 'success',
+          text: `${directRes.summary} (Saved in Firestore & audit log recorded)`,
         });
         return;
       }

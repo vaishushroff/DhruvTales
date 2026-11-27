@@ -10,7 +10,12 @@ import {
   updateDoc,
   writeBatch,
 } from 'firebase/firestore';
+import {
+  buildAdminSessionFirestoreUpdate,
+  evaluateAdminSessionAction,
+} from '../../../api/_lib/sessionEngine';
 import type {
+  AdminSessionActionType,
   AuditActionType,
   AuditLogEntry,
   Category,
@@ -399,6 +404,61 @@ export async function adminToggleUserDisabled(
       targetUser.uid,
       `${isDisabled ? 'Disabled' : 'Re-enabled'} user account ${targetUser.email}`
     );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `users/${targetUser.uid}`);
+  }
+}
+
+/**
+ * Direct Firestore Admin fallback for ban, unban, reset_warnings, and force_logout
+ * when static hosting (e.g. Cloudflare Workers/Pages) runs without a Node API backend.
+ * Strictly protected by `isAdmin()` and `isValidUserProfile()` in `firestore.rules`.
+ */
+export async function adminApplyUserSessionActionDirect(
+  actor: UserProfile,
+  targetUser: UserProfile,
+  action: AdminSessionActionType,
+  options?: { warningCount?: number; reason?: string }
+): Promise<{ summary: string; auditLog: AuditLogEntry }> {
+  const targetLabel =
+    targetUser.email || targetUser.phoneNumber || targetUser.displayName || targetUser.uid;
+  const evaluated = evaluateAdminSessionAction({
+    actorUid: actor.uid,
+    targetUid: targetUser.uid,
+    targetLabel,
+    action,
+    warningCountOverride: options?.warningCount,
+    reason: options?.reason,
+    userState: {
+      uid: targetUser.uid,
+      activeDevice: targetUser.activeDevice ?? null,
+      warningCount:
+        typeof targetUser.warningCount === 'number' && Number.isFinite(targetUser.warningCount)
+          ? Math.max(0, Math.floor(targetUser.warningCount))
+          : 0,
+      banned: Boolean(targetUser.banned),
+      banReason: targetUser.banReason ?? null,
+    },
+    sessionLogId: `sess_direct_${Date.now().toString(36)}`,
+  });
+
+  if (!evaluated.ok) {
+    throw new Error(evaluated.error || 'Unable to apply admin session action.');
+  }
+
+  const updatePayload = buildAdminSessionFirestoreUpdate(action, evaluated, serverTimestamp());
+
+  try {
+    await updateDoc(doc(db, 'users', targetUser.uid), updatePayload);
+    const summary = evaluated.auditSummary || `Applied ${action} for ${targetLabel}`;
+    const auditLog = await writeAuditLog(
+      actor,
+      evaluated.auditAction ?? 'user_disable_toggle',
+      'users',
+      targetUser.uid,
+      summary
+    );
+    return { summary, auditLog };
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `users/${targetUser.uid}`);
   }

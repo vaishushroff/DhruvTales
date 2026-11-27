@@ -401,3 +401,37 @@ export function evaluateAdminSessionAction(params: {
 
   return { ok: false, error: 'Unsupported admin session action.' };
 }
+
+/**
+ * Builds the exact Firestore `users/{uid}` update payload for an evaluated admin
+ * session action so both server-side Admin SDK and client-side Firestore Admin
+ * fallback write identical, schema-valid fields allowed by `firestore.rules`.
+ */
+export function buildAdminSessionFirestoreUpdate<TTimestamp>(
+  action: AdminSessionActionType,
+  evaluated: AdminSessionMutationPlan,
+  timestampValue: TTimestamp
+): Record<string, unknown> {
+  const updatePayload: Record<string, unknown> = {
+    banned: Boolean(evaluated.nextBanned),
+    isDisabled: Boolean(evaluated.nextIsDisabled),
+    warningCount: Math.max(0, Math.min(100, Math.floor(evaluated.nextWarningCount ?? 0))),
+    banReason:
+      typeof evaluated.nextBanReason === 'string' && evaluated.nextBanReason.trim()
+        ? evaluated.nextBanReason.trim().slice(0, 300)
+        : null,
+    updatedAt: timestampValue,
+  };
+
+  if (action === 'ban') {
+    updatePayload.bannedAt = timestampValue;
+  } else if (action === 'unban') {
+    updatePayload.bannedAt = null;
+  }
+
+  if (evaluated.clearActiveDevice) {
+    updatePayload.activeDevice = null;
+  }
+
+  return updatePayload;
+}

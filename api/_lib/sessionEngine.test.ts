@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildAdminSessionFirestoreUpdate,
   evaluateAdminSessionAction,
   evaluateSessionLogout,
   evaluateSessionRegister,
@@ -282,4 +283,77 @@ test('sanitizeDeviceId and sanitizeDeviceInfo reject invalid IDs and bound strin
   });
   assert.equal(info.label.length, 100);
   assert.equal(info.userAgent?.length, 220);
+});
+
+test('buildAdminSessionFirestoreUpdate builds schema-safe payloads for direct Firestore admin fallback', () => {
+  const TS = Symbol('serverTimestamp');
+  const allowedKeys = new Set([
+    'banned',
+    'isDisabled',
+    'warningCount',
+    'banReason',
+    'bannedAt',
+    'activeDevice',
+    'updatedAt',
+  ]);
+  const baseState: UserSessionState = {
+    uid: 'u_listener',
+    activeDevice: {
+      deviceId: deviceA,
+      deviceInfo: { label: 'Chrome on Windows' },
+      registeredAt: 1000,
+      lastSeen: 2000,
+    },
+    warningCount: 2,
+    banned: false,
+  };
+
+  const banEval = evaluateAdminSessionAction({
+    actorUid: 'u_admin',
+    targetUid: 'u_listener',
+    targetLabel: 'listener@example.com',
+    action: 'ban',
+    reason: 'Abuse',
+    userState: baseState,
+    sessionLogId: 's_1',
+  });
+  const banUpdate = buildAdminSessionFirestoreUpdate('ban', banEval, TS);
+  assert.equal(banUpdate.banned, true);
+  assert.equal(banUpdate.isDisabled, true);
+  assert.equal(banUpdate.bannedAt, TS);
+  assert.equal(banUpdate.activeDevice, null);
+  assert.equal(banUpdate.updatedAt, TS);
+  for (const key of Object.keys(banUpdate)) {
+    assert.ok(allowedKeys.has(key), `Unexpected key ${key}`);
+  }
+
+  const unbanEval = evaluateAdminSessionAction({
+    actorUid: 'u_admin',
+    targetUid: 'u_listener',
+    targetLabel: 'listener@example.com',
+    action: 'unban',
+    warningCountOverride: 1,
+    userState: { ...baseState, banned: true, warningCount: 3, activeDevice: null },
+    sessionLogId: 's_2',
+  });
+  const unbanUpdate = buildAdminSessionFirestoreUpdate('unban', unbanEval, TS);
+  assert.equal(unbanUpdate.banned, false);
+  assert.equal(unbanUpdate.isDisabled, false);
+  assert.equal(unbanUpdate.warningCount, 1);
+  assert.equal(unbanUpdate.bannedAt, null);
+  assert.equal(unbanUpdate.banReason, null);
+  assert.equal('activeDevice' in unbanUpdate, false);
+
+  const forceEval = evaluateAdminSessionAction({
+    actorUid: 'u_admin',
+    targetUid: 'u_listener',
+    targetLabel: 'listener@example.com',
+    action: 'force_logout',
+    userState: baseState,
+    sessionLogId: 's_3',
+  });
+  const forceUpdate = buildAdminSessionFirestoreUpdate('force_logout', forceEval, TS);
+  assert.equal(forceUpdate.activeDevice, null);
+  assert.equal(forceUpdate.banned, false);
+  assert.equal('bannedAt' in forceUpdate, false);
 });

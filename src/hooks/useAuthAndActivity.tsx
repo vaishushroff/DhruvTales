@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { onAuthStateChanged, type ConfirmationResult, type User } from 'firebase/auth';
+import { doc, onSnapshot } from 'firebase/firestore';
 import type {
   BookmarkEntry,
   BookmarkTargetType,
@@ -55,7 +56,7 @@ import {
   seedFirestoreCatalog,
   type SeedResult,
 } from '../services/firebase/catalogService';
-import { auth } from '../services/firebase/config';
+import { auth, db } from '../services/firebase/config';
 import {
   fetchMyCreatorRequest,
   submitCreatorRequestToFirestore,
@@ -384,12 +385,12 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         const synced = await syncUserProfile(user, langRef.current);
         if (hydrationRunIdRef.current !== runId) return;
 
-        if (synced.banned) {
+        if (synced.banned || synced.isDisabled) {
           triggerBannedNotice({
             warningCount: synced.warningCount ?? 3,
             banReason:
               synced.banReason ??
-              'Account banned after exceeding 3 concurrent device warnings.',
+              'This account has been banned and disabled by an administrator.',
           });
           await signOutAccount();
           return;
@@ -482,6 +483,50 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     return () => unsubscribe();
   }, [hydrateAuthenticatedUser, loadWalletForUser]);
+
+  // Real-time enforcement: if an admin bans, disables, or force-logs out this user in Firestore,
+  // immediately sign them out across static or full-stack deployments.
+  useEffect(() => {
+    if (!firebaseUser) return;
+    let hadActiveDevice = false;
+    const unsubscribe = onSnapshot(
+      doc(db, 'users', firebaseUser.uid),
+      (snap) => {
+        if (!snap.exists()) return;
+        const data = snap.data() as Record<string, unknown>;
+        const isBanned = Boolean(data.banned);
+        const isDisabled = Boolean(data.isDisabled);
+        if (isBanned || isDisabled) {
+          triggerBannedNotice({
+            warningCount:
+              typeof data.warningCount === 'number' && Number.isFinite(data.warningCount)
+                ? Math.max(0, Math.floor(data.warningCount))
+                : 3,
+            banReason:
+              typeof data.banReason === 'string' && data.banReason.trim()
+                ? data.banReason.trim()
+                : 'This account has been banned and disabled by an administrator.',
+          });
+          void signOutAccount();
+          return;
+        }
+
+        const hasActiveDevice = Boolean(data.activeDevice && typeof data.activeDevice === 'object');
+        if (hadActiveDevice && !hasActiveDevice) {
+          void signOutAccount();
+          return;
+        }
+        if (hasActiveDevice) {
+          hadActiveDevice = true;
+        }
+      },
+      (err) => {
+        console.warn('User status realtime listener paused:', err);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [firebaseUser, triggerBannedNotice]);
 
   const guestStateRef = useRef({
     history,
