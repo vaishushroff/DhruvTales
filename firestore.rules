@@ -187,7 +187,7 @@ service cloud.firestore {
         ref.keys().hasAll(['provider', 'id', 'type']) &&
         ref.keys().hasOnly(['provider', 'id', 'type']) &&
         ref.provider in ['demo', 'drive', 'youtube', 'gcs'] &&
-        ref.id is string && ref.id.size() >= 1 && ref.id.size() <= 160 &&
+        ref.id is string && ref.id.size() >= 1 && ref.id.size() <= 1024 &&
         ref.type in ['audio', 'video'];
     }
 

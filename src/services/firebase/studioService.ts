@@ -272,7 +272,7 @@ export async function saveCreatorEpisodeToFirestore(
   const titleHi = (input.titleHi.trim() || title).slice(0, 160);
   const description = input.description.trim().slice(0, 600);
   const descriptionHi = (input.descriptionHi.trim() || description).slice(0, 600);
-  const durationSec = Math.max(10, Math.min(86400, Math.round(input.durationSec)));
+  const durationSec = Math.max(1, Math.min(86400, Math.round(input.durationSec)));
   const requestedPriceCoins = Math.max(0, Math.min(100_000, Math.floor(Number(input.priceCoins) || 0)));
   const id = input.id ?? `ep-${slugify(input.storyId).slice(0, 24)}-${Date.now().toString(36)}`;
   const ref = doc(db, 'episodes', id);
@@ -280,7 +280,7 @@ export async function saveCreatorEpisodeToFirestore(
   try {
     const cleanAudioRef: MediaRef = {
       provider: input.audioRef.provider,
-      id: input.audioRef.id.slice(0, 160),
+      id: input.audioRef.id.slice(0, 1024),
       type: 'audio',
     };
 
@@ -300,7 +300,7 @@ export async function saveCreatorEpisodeToFirestore(
     if (input.videoMediaRef) {
       payload.videoMediaRef = {
         provider: input.videoMediaRef.provider,
-        id: input.videoMediaRef.id.slice(0, 160),
+        id: input.videoMediaRef.id.slice(0, 1024),
         type: 'video',
       };
     }

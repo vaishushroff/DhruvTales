@@ -27,7 +27,6 @@ import {
 } from 'firebase/firestore';
 import type { ActiveDeviceSession, LanguageCode, PlaybackFormat, UserProfile } from '../../types';
 import { auth, db, googleProvider, handleFirestoreError, OperationType } from './config';
-import { clearCachedDriveAccessToken } from '../media/googleDriveClient';
 import {
   BOOTSTRAP_ADMIN_EMAIL,
   buildFallbackUserProfile,
@@ -126,7 +125,6 @@ export async function resendVerificationEmail(user: User): Promise<void> {
 }
 
 export async function signOutAccount(): Promise<void> {
-  clearCachedDriveAccessToken();
   await signOut(auth);
 }
 

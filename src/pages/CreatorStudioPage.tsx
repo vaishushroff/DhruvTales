@@ -7,11 +7,11 @@ import {
   BarChart3,
   BookOpen,
   CheckCircle2,
+  Clock,
   Coins,
   Edit3,
   ExternalLink,
   Film,
-  FolderInput,
   GitBranch,
   Layers,
   Loader2,
@@ -22,11 +22,9 @@ import {
   RefreshCw,
   ShieldCheck,
   Trash2,
-  Upload,
   Users,
   X,
 } from 'lucide-react';
-import { DriveFolderImportModal } from '../components/DriveFolderImportModal';
 import { PortraitVideoFrame } from '../components/PortraitVideoFrame';
 import { useAudioPlayer } from '../hooks/useAudioPlayer';
 import { useAppData } from '../hooks/useAuthAndActivity';
@@ -41,14 +39,18 @@ import {
   saveCreatorEpisodeToFirestore,
   saveCreatorStoryToFirestore,
 } from '../services/firebase/studioService';
-import { getMediaProvider } from '../services/media';
 import {
-  applyVideoSelectionToEpisodeForm,
+  formatRealDuration,
+  getMediaProvider,
+  isPlaceholderMediaRef,
+  probeMediaMetadata,
+  resolveCreatorMediaInput,
+  SUPPORTED_AUDIO_FORMAT_LABEL,
+  SUPPORTED_VIDEO_FORMAT_LABEL,
+} from '../services/media';
+import {
   detectVideoAspectFormat,
-  formatPortraitRejectionMessage,
   formatVideoDimensions,
-  readVideoFileDimensions,
-  validateSupportedVideoDimensions,
   type VideoAspectFormat,
 } from '../services/media/portraitVideo';
 import {
@@ -165,26 +167,33 @@ export const CreatorStudioPage: React.FC = () => {
   // Episode modal state
   const [episodeModalOpen, setEpisodeModalOpen] = useState(false);
   const [episodeForm, setEpisodeForm] = useState<EpisodeFormState | null>(null);
-  const [uploadingSlot, setUploadingSlot] = useState<'audio' | 'video' | null>(null);
-  const [validatingVideo, setValidatingVideo] = useState(false);
-  const [videoValidationError, setVideoValidationError] = useState<{
-    kind: 'wrong_aspect_ratio' | 'unreadable_metadata';
-    message: string;
-    file?: File;
-  } | null>(null);
   const [videoDetectedDimensions, setVideoDetectedDimensions] = useState<{
     width: number;
     height: number;
-    format: VideoAspectFormat;
   } | null>(null);
-  const [studioPreviewAspect, setStudioPreviewAspect] = useState<VideoAspectFormat>('9:16');
+  const [studioPreviewAspect, setStudioPreviewAspect] = useState<VideoAspectFormat>('16:9');
+  const [studioPreviewNaturalAspect, setStudioPreviewNaturalAspect] = useState<number | null>(null);
   const [studioPreviewUrl, setStudioPreviewUrl] = useState<string | null>(null);
   const [studioPreviewLoading, setStudioPreviewLoading] = useState(false);
-  const audioInputRef = useRef<HTMLInputElement | null>(null);
-  const videoInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Google Drive folder import modal
-  const [driveImportOpen, setDriveImportOpen] = useState(false);
+  // Automatic real media & duration probing state
+  type SlotProbeState = {
+    status: 'idle' | 'probing' | 'verified' | 'embed_only' | 'unverified';
+    durationSec?: number | null;
+    width?: number;
+    height?: number;
+    resolvedUrl?: string;
+    message?: string;
+  };
+  const [audioLinkInput, setAudioLinkInput] = useState('');
+  const [audioLinkFeedback, setAudioLinkFeedback] = useState<{ ok: boolean; text: string } | null>(null);
+  const [audioProbe, setAudioProbe] = useState<SlotProbeState>({ status: 'idle' });
+  const [videoLinkInput, setVideoLinkInput] = useState('');
+  const [videoLinkFeedback, setVideoLinkFeedback] = useState<{ ok: boolean; text: string } | null>(null);
+  const [videoProbe, setVideoProbe] = useState<SlotProbeState>({ status: 'idle' });
+  const [durationDetected, setDurationDetected] = useState(false);
+  const audioProbeSeqRef = useRef(0);
+  const videoProbeSeqRef = useRef(0);
 
   // Delete story confirmation
   const [deleteStoryTarget, setDeleteStoryTarget] = useState<Story | null>(null);
@@ -455,12 +464,66 @@ export const CreatorStudioPage: React.FC = () => {
     }
   };
 
+  // --- Automatic Real Media & Duration Detection ---
+  const triggerMediaProbe = useCallback((slot: 'audio' | 'video', mediaRef: MediaRef) => {
+    const seqRef = slot === 'audio' ? audioProbeSeqRef : videoProbeSeqRef;
+    const setProbe = slot === 'audio' ? setAudioProbe : setVideoProbe;
+    const seq = ++seqRef.current;
+
+    setProbe({
+      status: 'probing',
+      message: `Detecting real ${slot} file & duration…`,
+    });
+
+    void probeMediaMetadata(mediaRef).then((res) => {
+      if (seqRef.current !== seq) return;
+
+      if (res.status === 'verified') {
+        setProbe({
+          status: 'verified',
+          durationSec: res.durationSec,
+          width: res.width,
+          height: res.height,
+          resolvedUrl: res.resolvedUrl,
+          message:
+            slot === 'video' && res.width && res.height
+              ? `Verified video · ${formatVideoDimensions(res.width, res.height)} (original) · Real duration: ${formatRealDuration(res.durationSec)}`
+              : `Verified ${slot} · Real duration: ${formatRealDuration(res.durationSec)}`,
+        });
+        setDurationDetected(true);
+        setEpisodeForm((prev) => (prev ? { ...prev, durationSec: res.durationSec } : prev));
+        if (slot === 'video' && res.width && res.height) {
+          setVideoDetectedDimensions({ width: res.width, height: res.height });
+          setStudioPreviewAspect(detectVideoAspectFormat(res.width, res.height));
+          setStudioPreviewNaturalAspect(res.width / res.height);
+        }
+      } else if (res.status === 'embed_only') {
+        setProbe({
+          status: 'embed_only',
+          durationSec: null,
+          message:
+            'Google Drive file attached · Plays in universal Drive player across all formats (duration syncs automatically on playback).',
+        });
+      } else {
+        setProbe({
+          status: 'unverified',
+          message: res.reason,
+        });
+      }
+    });
+  }, []);
+
   // --- Episode CRUD & Reorder Handlers ---
   const openCreateEpisode = () => {
     if (!selectedStory) return;
     setBanner(null);
-    setVideoValidationError(null);
+    audioProbeSeqRef.current += 1;
+    videoProbeSeqRef.current += 1;
     setVideoDetectedDimensions(null);
+    setStudioPreviewNaturalAspect(null);
+    setDurationDetected(false);
+    setAudioProbe({ status: 'idle' });
+    setVideoProbe({ status: 'idle' });
     const nextNum = selectedStoryEpisodes.length + 1;
     setEpisodeForm({
       episodeNumber: nextNum,
@@ -468,7 +531,7 @@ export const CreatorStudioPage: React.FC = () => {
       titleHi: '',
       description: '',
       descriptionHi: '',
-      durationSec: 180,
+      durationSec: 1,
       priceCoins: nextNum <= 2 ? 0 : 10,
       isEnding: false,
       audioRef: {
@@ -487,14 +550,24 @@ export const CreatorStudioPage: React.FC = () => {
         { id: `opt-${Date.now()}-2`, labelEn: '', labelHi: '', nextEpisodeId: '' },
       ],
     });
+    setAudioLinkInput('');
+    setAudioLinkFeedback(null);
+    setVideoLinkInput('');
+    setVideoLinkFeedback(null);
     setEpisodeModalOpen(true);
   };
 
   const openEditEpisode = (ep: Episode) => {
     setBanner(null);
-    setVideoValidationError(null);
+    audioProbeSeqRef.current += 1;
+    videoProbeSeqRef.current += 1;
     setVideoDetectedDimensions(null);
+    setStudioPreviewNaturalAspect(null);
+    setAudioProbe({ status: 'idle' });
+    setVideoProbe({ status: 'idle' });
     const cp = ep.choicePoint;
+    const existingAudio = ep.audioRef ?? ep.mediaRef;
+    setDurationDetected(ep.durationSec > 1);
     setEpisodeForm({
       id: ep.id,
       episodeNumber: ep.episodeNumber,
@@ -505,7 +578,7 @@ export const CreatorStudioPage: React.FC = () => {
       durationSec: ep.durationSec,
       priceCoins: ep.priceCoins ?? 0,
       isEnding: Boolean(ep.isEnding),
-      audioRef: ep.audioRef ?? ep.mediaRef,
+      audioRef: existingAudio,
       videoMediaRef: ep.videoMediaRef ?? null,
       hasChoicePoint: Boolean(cp),
       choiceTriggerAtEnd: cp ? Boolean(cp.triggerAtEnd ?? !cp.triggerAtSec) : true,
@@ -520,96 +593,25 @@ export const CreatorStudioPage: React.FC = () => {
               { id: `opt-${Date.now()}-2`, labelEn: '', labelHi: '', nextEpisodeId: '' },
             ],
     });
+    setAudioLinkInput(
+      existingAudio.provider === 'drive' || /^https:\/\//i.test(existingAudio.id)
+        ? existingAudio.id
+        : ''
+    );
+    setAudioLinkFeedback(null);
+    setVideoLinkInput(
+      ep.videoMediaRef && (ep.videoMediaRef.provider === 'drive' || /^https:\/\//i.test(ep.videoMediaRef.id))
+        ? ep.videoMediaRef.id
+        : ''
+    );
+    setVideoLinkFeedback(null);
     setEpisodeModalOpen(true);
-  };
 
-  const handleUploadMediaSlot = async (slot: 'audio' | 'video', file: File | undefined) => {
-    if (!file || !episodeForm || !selectedStory) return;
-    setBanner(null);
-
-    if (slot === 'video') {
-      setValidatingVideo(true);
-      setVideoValidationError(null);
-      try {
-        const dims = await readVideoFileDimensions(file);
-        const validation = validateSupportedVideoDimensions(dims.width, dims.height);
-        if (!validation.valid) {
-          setVideoValidationError({
-            kind: validation.reason === 'wrong_aspect_ratio' ? 'wrong_aspect_ratio' : 'unreadable_metadata',
-            message:
-              validation.reason === 'wrong_aspect_ratio'
-                ? formatPortraitRejectionMessage(
-                    t('studio.videoAspectRatioError'),
-                    validation.width,
-                    validation.height
-                  )
-                : t('studio.videoMetadataUnreadableError'),
-            file: validation.reason === 'invalid_metadata' ? file : undefined,
-          });
-          // Previous videoMediaRef and all unsaved form text remain untouched
-          return;
-        }
-
-        setValidatingVideo(false);
-        setUploadingSlot('video');
-        const demoProvider = getMediaProvider('demo');
-        const uploadedRef = await demoProvider.upload(file, {
-          storyId: selectedStory.id,
-          episodeId: episodeForm.id,
-          title: episodeForm.title || file.name,
-        });
-        setEpisodeForm((prev) => {
-          if (!prev) return prev;
-          const { nextForm } = applyVideoSelectionToEpisodeForm(prev, validation, {
-            ...uploadedRef,
-            type: 'video',
-          });
-          return nextForm;
-        });
-        setVideoDetectedDimensions({
-          width: validation.width,
-          height: validation.height,
-          format: validation.format,
-        });
-        setStudioPreviewAspect(validation.format);
-      } catch {
-        setVideoValidationError({
-          kind: 'unreadable_metadata',
-          message: t('studio.videoMetadataUnreadableError'),
-          file,
-        });
-      } finally {
-        setValidatingVideo(false);
-        setUploadingSlot(null);
-        if (videoInputRef.current) {
-          videoInputRef.current.value = '';
-        }
-      }
-      return;
+    if (!isPlaceholderMediaRef(existingAudio)) {
+      triggerMediaProbe('audio', existingAudio);
     }
-
-    setUploadingSlot('audio');
-    try {
-      const demoProvider = getMediaProvider('demo');
-      const uploadedRef = await demoProvider.upload(file, {
-        storyId: selectedStory.id,
-        episodeId: episodeForm.id,
-        title: episodeForm.title || file.name,
-      });
-      setEpisodeForm((prev) => {
-        if (!prev) return prev;
-        return { ...prev, audioRef: { ...uploadedRef, type: 'audio' } };
-      });
-    } catch (err) {
-      setBanner({
-        type: 'error',
-        text: getSafeErrorMessage(err, 'MediaProvider upload failed.'),
-      });
-    } finally {
-      setUploadingSlot(null);
-      if (audioInputRef.current) {
-        audioInputRef.current.value = '';
-      }
+    if (ep.videoMediaRef && !isPlaceholderMediaRef(ep.videoMediaRef)) {
+      triggerMediaProbe('video', ep.videoMediaRef);
     }
   };
 
@@ -641,6 +643,59 @@ export const CreatorStudioPage: React.FC = () => {
       setBanner({ type: 'error', text: 'Episode title is required.' });
       return;
     }
+
+    const hasRealAudio = !isPlaceholderMediaRef(episodeForm.audioRef);
+    const hasRealVideo =
+      Boolean(episodeForm.videoMediaRef) && !isPlaceholderMediaRef(episodeForm.videoMediaRef);
+
+    if (!hasRealAudio && !hasRealVideo) {
+      setBanner({
+        type: 'error',
+        text: 'Paste a real Audio or Video link (direct HTTPS file URL or shared Google Drive file) before saving.',
+      });
+      return;
+    }
+
+    if (audioLinkInput.trim() && audioLinkFeedback && !audioLinkFeedback.ok) {
+      setBanner({ type: 'error', text: audioLinkFeedback.text });
+      return;
+    }
+    if (videoLinkInput.trim() && videoLinkFeedback && !videoLinkFeedback.ok) {
+      setBanner({ type: 'error', text: videoLinkFeedback.text });
+      return;
+    }
+
+    if (audioLinkInput.trim() && audioProbe.status === 'unverified') {
+      setBanner({
+        type: 'error',
+        text:
+          audioProbe.message ??
+          'Audio link could not be verified as a real audio file. Paste a public audio file link or shared Google Drive file.',
+      });
+      return;
+    }
+    if (videoLinkInput.trim() && videoProbe.status === 'unverified') {
+      setBanner({
+        type: 'error',
+        text:
+          videoProbe.message ??
+          'Video link could not be verified as a real video file. Paste a public video file link or shared Google Drive file.',
+      });
+      return;
+    }
+
+    // If only a video file is attached, mirror it to audioRef so video-only episodes save & play cleanly
+    const effectiveAudioRef: MediaRef = hasRealAudio
+      ? episodeForm.audioRef
+      : { ...(episodeForm.videoMediaRef as MediaRef), type: 'audio' };
+
+    const detectedDur =
+      audioProbe.durationSec ??
+      videoProbe.durationSec ??
+      (Number.isFinite(episodeForm.durationSec) && episodeForm.durationSec > 0
+        ? episodeForm.durationSec
+        : 1);
+    const safeDurationSec = Math.max(1, Math.min(86400, Math.round(detectedDur)));
 
     let choicePointPayload: EpisodeChoicePoint | null = null;
     if (episodeForm.hasChoicePoint) {
@@ -681,10 +736,10 @@ export const CreatorStudioPage: React.FC = () => {
           titleHi: episodeForm.titleHi,
           description: episodeForm.description,
           descriptionHi: episodeForm.descriptionHi,
-          durationSec: episodeForm.durationSec,
+          durationSec: safeDurationSec,
           priceCoins: episodeForm.priceCoins,
           isEnding: episodeForm.isEnding,
-          audioRef: episodeForm.audioRef,
+          audioRef: effectiveAudioRef,
           videoMediaRef: episodeForm.videoMediaRef,
           choicePoint: choicePointPayload,
         },
@@ -1031,16 +1086,7 @@ export const CreatorStudioPage: React.FC = () => {
             <div className="flex flex-wrap items-center gap-2.5">
               <button
                 type="button"
-                data-testid="studio-import-drive-btn"
-                disabled={!selectedStory}
-                onClick={() => setDriveImportOpen(true)}
-                className="min-h-[44px] px-4 rounded-xl bg-[#1C1C22] border border-[#E5A93C]/40 text-[#F3C669] text-xs font-semibold hover:border-[#E5A93C] disabled:opacity-40 inline-flex items-center gap-2 whitespace-nowrap transition-colors"
-              >
-                <FolderInput className="w-4 h-4" aria-hidden="true" />
-                {t('studio.importDriveFolderBtn')}
-              </button>
-              <button
-                type="button"
+                data-testid="studio-add-episode-btn"
                 disabled={!selectedStory}
                 onClick={openCreateEpisode}
                 className="min-h-[44px] px-5 rounded-xl bg-[#E5A93C] text-[#0B0B0E] text-xs font-semibold hover:bg-[#F3C669] disabled:opacity-40 inline-flex items-center gap-2 whitespace-nowrap"
@@ -1070,7 +1116,9 @@ export const CreatorStudioPage: React.FC = () => {
                         {t('common.episode')} {ep.episodeNumber}
                       </span>
                       <span className="text-[#55524B]">·</span>
-                      <span className="text-[#A39E93]">{ep.durationSec}s</span>
+                      <span className="text-[#A39E93]">
+                        {ep.durationSec > 1 ? formatRealDuration(ep.durationSec) : 'Auto'}
+                      </span>
                       <span className="text-[#55524B]">·</span>
                       <span className="text-[#F3C669] inline-flex items-center gap-1 tabular-nums">
                         <Coins className="w-3 h-3 text-[#E5A93C]" aria-hidden="true" />
@@ -1509,18 +1557,33 @@ export const CreatorStudioPage: React.FC = () => {
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-xs text-[#A39E93] block">{t('studio.epDuration')}</label>
-                <input
-                  type="number"
-                  min={10}
-                  max={86400}
-                  required
-                  value={episodeForm.durationSec}
-                  onChange={(e) =>
-                    setEpisodeForm({ ...episodeForm, durationSec: Number(e.target.value) || 60 })
-                  }
-                  className="w-full h-11 px-3 rounded-xl bg-[#0B0B0E] border border-white/10 text-sm text-[#F5F3EE] tabular-nums"
-                />
+                <span className="text-xs text-[#A39E93] block">Detected Duration</span>
+                <div
+                  data-testid="studio-detected-duration"
+                  className="w-full min-h-[44px] px-3 rounded-xl bg-[#0B0B0E] border border-white/10 text-xs text-[#F5F3EE] flex items-center gap-2 tabular-nums"
+                >
+                  {audioProbe.status === 'probing' || videoProbe.status === 'probing' ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 text-[#E5A93C] animate-spin shrink-0" aria-hidden="true" />
+                      <span className="text-[#A39E93]">Detecting…</span>
+                    </>
+                  ) : durationDetected && episodeForm.durationSec > 1 ? (
+                    <>
+                      <Clock className="w-3.5 h-3.5 text-emerald-400 shrink-0" aria-hidden="true" />
+                      <span className="font-medium text-emerald-300">
+                        {formatRealDuration(episodeForm.durationSec)}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <Clock className="w-3.5 h-3.5 text-[#8A857B] shrink-0" aria-hidden="true" />
+                      <span className="text-[#A39E93]">Auto-detected from file</span>
+                    </>
+                  )}
+                </div>
+                <p className="text-[11px] text-[#8A857B]">
+                  Read automatically from your real audio/video file — no length limits or trimming.
+                </p>
               </div>
 
               <div className="space-y-1.5">
@@ -1606,127 +1669,200 @@ export const CreatorStudioPage: React.FC = () => {
               </div>
             </div>
 
-            {/* MediaProvider Upload Slots */}
+            {/* Direct Audio & Video Link Slots (All Web Formats · Original Size & Real Duration) */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 rounded-xl bg-[#0B0B0E] border border-white/[0.08] p-4">
-              <div className="space-y-2">
-                <p className="text-xs font-medium text-[#F5F3EE]">{t('studio.audioSlotLabel')}</p>
-                <p className="text-[11px] text-[#8A857B] truncate">
-                  {t('studio.attachedRefLabel')}: {episodeForm.audioRef.provider}:{episodeForm.audioRef.id}
-                </p>
-                <label className="min-h-[40px] px-3.5 rounded-lg bg-[#1C1C22] border border-white/15 text-xs font-medium text-[#F5F3EE] hover:border-[#E5A93C]/50 inline-flex items-center gap-2 cursor-pointer">
-                  <Upload className="w-3.5 h-3.5 text-[#E5A93C]" aria-hidden="true" />
-                  {uploadingSlot === 'audio' ? 'Uploading...' : t('studio.uploadAudioBtn')}
+              <div className="space-y-2.5">
+                <p className="text-xs font-medium text-[#F5F3EE]">Audio Media Link</p>
+                <div className="space-y-1.5">
+                  <label htmlFor="studio-audio-link-input" className="text-[11px] text-[#A39E93] block">
+                    Paste direct HTTPS audio link, Dropbox link, or shared Google Drive file link
+                  </label>
                   <input
-                    ref={audioInputRef}
-                    type="file"
-                    accept="audio/*"
-                    disabled={uploadingSlot === 'audio'}
-                    className="sr-only"
-                    onChange={(e) => void handleUploadMediaSlot('audio', e.target.files?.[0])}
+                    id="studio-audio-link-input"
+                    type="text"
+                    value={audioLinkInput}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setAudioLinkInput(val);
+                      if (!val.trim()) {
+                        audioProbeSeqRef.current += 1;
+                        setAudioLinkFeedback(null);
+                        setAudioProbe({ status: 'idle' });
+                        setEpisodeForm((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                audioRef: {
+                                  provider: 'demo',
+                                  id: `demo-audio-${selectedStory?.id ?? 'story'}-ep${prev.episodeNumber}`,
+                                  type: 'audio',
+                                },
+                              }
+                            : prev
+                        );
+                        return;
+                      }
+                      const parsed = resolveCreatorMediaInput(val, 'audio');
+                      if (parsed.ok) {
+                        setEpisodeForm((prev) => (prev ? { ...prev, audioRef: parsed.mediaRef } : prev));
+                        setAudioLinkFeedback({ ok: true, text: `Attached: ${parsed.label}` });
+                        triggerMediaProbe('audio', parsed.mediaRef);
+                      } else {
+                        audioProbeSeqRef.current += 1;
+                        setAudioProbe({ status: 'idle' });
+                        setAudioLinkFeedback({ ok: false, text: parsed.reason });
+                      }
+                    }}
+                    placeholder="https://.../ep01.mp3, .m4a, .wav, .ogg or Google Drive link"
+                    className="w-full h-10 px-3 rounded-lg bg-[#141418] border border-white/15 text-xs text-[#F5F3EE] placeholder:text-[#66625B] focus:outline-none focus:border-[#E5A93C]"
                   />
-                </label>
+                  {audioLinkFeedback && !audioLinkFeedback.ok && (
+                    <p className="text-[11px] leading-snug text-rose-300">
+                      {audioLinkFeedback.text}
+                    </p>
+                  )}
+                  {audioProbe.status === 'probing' && (
+                    <p className="text-[11px] leading-snug text-[#F3C669] inline-flex items-center gap-1.5">
+                      <Loader2 className="w-3 h-3 animate-spin shrink-0" aria-hidden="true" />
+                      {audioProbe.message}
+                    </p>
+                  )}
+                  {(audioProbe.status === 'verified' || audioProbe.status === 'embed_only') && (
+                    <p className="text-[11px] leading-snug text-emerald-300 inline-flex items-start gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 shrink-0 mt-0.5" aria-hidden="true" />
+                      <span>{audioProbe.message}</span>
+                    </p>
+                  )}
+                  {audioProbe.status === 'unverified' && (
+                    <p className="text-[11px] leading-snug text-rose-300 inline-flex items-start gap-1.5">
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" aria-hidden="true" />
+                      <span>{audioProbe.message}</span>
+                    </p>
+                  )}
+                </div>
+                <p className="text-[11px] text-[#8A857B] leading-relaxed">
+                  Supported audio formats: {SUPPORTED_AUDIO_FORMAT_LABEL}
+                </p>
+                {!isPlaceholderMediaRef(episodeForm.audioRef) && (
+                  <p className="text-[11px] text-[#8A857B] truncate">
+                    {t('studio.attachedRefLabel')}: {episodeForm.audioRef.provider}:{episodeForm.audioRef.id}
+                  </p>
+                )}
               </div>
 
               <div className="space-y-2.5">
-                <p className="text-xs font-medium text-[#F5F3EE]">{t('studio.videoSlotLabel')}</p>
+                <p className="text-xs font-medium text-[#F5F3EE]">
+                  Video Media Link (Optional — enables Audio ⇄ Video)
+                </p>
+                <div className="space-y-1.5">
+                  <label htmlFor="studio-video-link-input" className="text-[11px] text-[#A39E93] block">
+                    Paste direct HTTPS video link, Dropbox link, or shared Google Drive file link
+                  </label>
+                  <input
+                    id="studio-video-link-input"
+                    type="text"
+                    value={videoLinkInput}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setVideoLinkInput(val);
+                      if (!val.trim()) {
+                        videoProbeSeqRef.current += 1;
+                        setVideoLinkFeedback(null);
+                        setVideoProbe({ status: 'idle' });
+                        setVideoDetectedDimensions(null);
+                        setStudioPreviewNaturalAspect(null);
+                        setEpisodeForm((prev) => (prev ? { ...prev, videoMediaRef: null } : prev));
+                        return;
+                      }
+                      const parsed = resolveCreatorMediaInput(val, 'video');
+                      if (parsed.ok) {
+                        setEpisodeForm((prev) =>
+                          prev ? { ...prev, videoMediaRef: parsed.mediaRef } : prev
+                        );
+                        setVideoLinkFeedback({ ok: true, text: `Attached: ${parsed.label}` });
+                        triggerMediaProbe('video', parsed.mediaRef);
+                      } else {
+                        videoProbeSeqRef.current += 1;
+                        setVideoProbe({ status: 'idle' });
+                        setVideoLinkFeedback({ ok: false, text: parsed.reason });
+                      }
+                    }}
+                    placeholder="https://.../ep01.mp4, .webm, .mov, .mkv or Google Drive link"
+                    className="w-full h-10 px-3 rounded-lg bg-[#141418] border border-white/15 text-xs text-[#F5F3EE] placeholder:text-[#66625B] focus:outline-none focus:border-[#E5A93C]"
+                  />
+                  {videoLinkFeedback && !videoLinkFeedback.ok && (
+                    <p className="text-[11px] leading-snug text-rose-300">
+                      {videoLinkFeedback.text}
+                    </p>
+                  )}
+                  {videoProbe.status === 'probing' && (
+                    <p className="text-[11px] leading-snug text-[#F3C669] inline-flex items-center gap-1.5">
+                      <Loader2 className="w-3 h-3 animate-spin shrink-0" aria-hidden="true" />
+                      {videoProbe.message}
+                    </p>
+                  )}
+                  {(videoProbe.status === 'verified' || videoProbe.status === 'embed_only') && (
+                    <p className="text-[11px] leading-snug text-emerald-300 inline-flex items-start gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 shrink-0 mt-0.5" aria-hidden="true" />
+                      <span>{videoProbe.message}</span>
+                    </p>
+                  )}
+                  {videoProbe.status === 'unverified' && (
+                    <p className="text-[11px] leading-snug text-rose-300 inline-flex items-start gap-1.5">
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" aria-hidden="true" />
+                      <span>{videoProbe.message}</span>
+                    </p>
+                  )}
+                </div>
                 <p
                   data-testid="studio-video-instruction"
-                  className="text-[11px] text-[#D6D2C9] leading-relaxed"
+                  className="text-[11px] text-[#8A857B] leading-relaxed"
                 >
-                  {t('studio.videoPortraitInstruction')}
+                  Supported video formats: {SUPPORTED_VIDEO_FORMAT_LABEL}. Plays in your exact original size, aspect ratio, and full duration with no cropping or trimming.
                 </p>
-                <p
-                  data-testid="studio-attached-video-ref"
-                  className="text-[11px] text-[#8A857B] truncate"
-                >
-                  {episodeForm.videoMediaRef
-                    ? `${episodeForm.videoMediaRef.provider}:${episodeForm.videoMediaRef.id}`
-                    : 'None attached'}
-                  {videoDetectedDimensions && (
-                    <span className="ml-1.5 text-emerald-400 font-mono-tabular">
-                      · {formatVideoDimensions(videoDetectedDimensions.width, videoDetectedDimensions.height)} ({videoDetectedDimensions.format})
-                    </span>
-                  )}
-                </p>
-                <div className="flex flex-wrap items-center gap-2">
-                  <label className="min-h-[44px] px-3.5 rounded-lg bg-[#1C1C22] border border-white/15 text-xs font-medium text-[#F5F3EE] hover:border-[#E5A93C]/50 inline-flex items-center gap-2 cursor-pointer">
-                    {validatingVideo || uploadingSlot === 'video' ? (
-                      <Loader2 className="w-3.5 h-3.5 text-[#E5A93C] animate-spin" aria-hidden="true" />
-                    ) : (
-                      <Upload className="w-3.5 h-3.5 text-[#E5A93C]" aria-hidden="true" />
+                <div className="flex items-center justify-between gap-2">
+                  <p
+                    data-testid="studio-attached-video-ref"
+                    className="text-[11px] text-[#8A857B] truncate"
+                  >
+                    {episodeForm.videoMediaRef
+                      ? `${episodeForm.videoMediaRef.provider}:${episodeForm.videoMediaRef.id}`
+                      : 'None attached'}
+                    {videoDetectedDimensions && (
+                      <span className="ml-1.5 text-emerald-400 font-mono-tabular">
+                        · {formatVideoDimensions(videoDetectedDimensions.width, videoDetectedDimensions.height)}
+                      </span>
                     )}
-                    {validatingVideo
-                      ? t('studio.videoValidating')
-                      : uploadingSlot === 'video'
-                        ? 'Uploading...'
-                        : t('studio.uploadVideoBtn')}
-                    <input
-                      ref={videoInputRef}
-                      data-testid="studio-video-file-input"
-                      type="file"
-                      accept="video/*"
-                      disabled={validatingVideo || uploadingSlot === 'video'}
-                      className="sr-only"
-                      onChange={(e) => void handleUploadMediaSlot('video', e.target.files?.[0])}
-                    />
-                  </label>
+                  </p>
                   {episodeForm.videoMediaRef && (
                     <button
                       type="button"
                       onClick={() => {
+                        videoProbeSeqRef.current += 1;
                         setEpisodeForm({ ...episodeForm, videoMediaRef: null });
+                        setVideoLinkInput('');
+                        setVideoLinkFeedback(null);
+                        setVideoProbe({ status: 'idle' });
                         setVideoDetectedDimensions(null);
-                        setVideoValidationError(null);
+                        setStudioPreviewNaturalAspect(null);
                       }}
-                      className="min-h-[44px] px-3 rounded-lg border border-white/10 text-xs text-[#A39E93] hover:text-rose-300"
+                      className="min-h-[32px] px-2.5 rounded-lg border border-white/10 text-[11px] text-[#A39E93] hover:text-rose-300 shrink-0"
                     >
                       {t('studio.clearVideoBtn')}
                     </button>
                   )}
                 </div>
-
-                {videoValidationError && (
-                  <div
-                    role="alert"
-                    data-testid="studio-video-validation-error"
-                    className="rounded-xl bg-rose-950/50 border border-rose-500/35 p-3 space-y-2 text-xs text-rose-200"
-                  >
-                    <div className="flex items-start gap-2">
-                      <AlertTriangle className="w-4 h-4 text-rose-300 shrink-0 mt-0.5" aria-hidden="true" />
-                      <p className="leading-relaxed">{videoValidationError.message}</p>
-                    </div>
-                    {videoValidationError.kind === 'unreadable_metadata' && (
-                      <div className="flex flex-wrap items-center gap-2 pt-1">
-                        {videoValidationError.file && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              void handleUploadMediaSlot('video', videoValidationError.file)
-                            }
-                            className="min-h-[36px] px-3 rounded-lg bg-[#1C1C22] border border-white/15 text-xs font-medium text-[#F5F3EE] hover:border-[#E5A93C]/50"
-                          >
-                            {t('studio.videoRetryCheck')}
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => videoInputRef.current?.click()}
-                          className="min-h-[36px] px-3 rounded-lg bg-[#E5A93C] text-[#0B0B0E] text-xs font-semibold hover:bg-[#F3C669]"
-                        >
-                          {t('studio.videoChooseAnother')}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
               </div>
 
-              {/* Shared Adaptive Studio Video Preview (9:16 or 16:9 matching uploaded format) */}
+              {/* Original-Format Studio Video Preview */}
               {episodeForm.videoMediaRef && (
                 <div className="sm:col-span-2 pt-3 border-t border-white/[0.08] space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="text-xs font-medium text-[#F3C669]">
-                      {t('studio.videoPreviewHeading')} · {studioPreviewAspect}
+                      {t('studio.videoPreviewHeading')} ·{' '}
+                      {videoDetectedDimensions
+                        ? `${formatVideoDimensions(videoDetectedDimensions.width, videoDetectedDimensions.height)} (Original)`
+                        : 'Original Size'}
                     </p>
                     <button
                       type="button"
@@ -1739,9 +1875,10 @@ export const CreatorStudioPage: React.FC = () => {
                   </div>
                   <PortraitVideoFrame
                     aspect={studioPreviewAspect}
+                    naturalAspectRatio={studioPreviewNaturalAspect}
                     frameTestId="studio-portrait-video-preview"
-                    maxHeightCss={studioPreviewAspect === '16:9' ? '260px' : '320px'}
-                    maxWidthCss={studioPreviewAspect === '16:9' ? '460px' : '180px'}
+                    maxHeightCss="300px"
+                    maxWidthCss="460px"
                   >
                     {studioPreviewLoading ? (
                       <div className="w-full h-full flex items-center justify-center bg-black">
@@ -1757,9 +1894,16 @@ export const CreatorStudioPage: React.FC = () => {
                         onLoadedMetadata={(e) => {
                           const v = e.currentTarget;
                           if (v.videoWidth > 0 && v.videoHeight > 0) {
+                            setVideoDetectedDimensions({ width: v.videoWidth, height: v.videoHeight });
                             setStudioPreviewAspect(
                               detectVideoAspectFormat(v.videoWidth, v.videoHeight)
                             );
+                            setStudioPreviewNaturalAspect(v.videoWidth / v.videoHeight);
+                          }
+                          if (Number.isFinite(v.duration) && v.duration > 0) {
+                            const realDur = Math.max(1, Math.min(86400, Math.round(v.duration)));
+                            setDurationDetected(true);
+                            setEpisodeForm((prev) => (prev ? { ...prev, durationSec: realDur } : prev));
                           }
                         }}
                         className="w-full h-full object-contain bg-black"
@@ -2022,23 +2166,6 @@ export const CreatorStudioPage: React.FC = () => {
           </div>
         </div>
       )}
-
-      {/* GOOGLE DRIVE / DIRECT BATCH EPISODE IMPORT MODAL */}
-      <DriveFolderImportModal
-        open={driveImportOpen}
-        story={selectedStory}
-        existingEpisodes={selectedStoryEpisodes}
-        actorUid={profile?.uid}
-        onClose={() => setDriveImportOpen(false)}
-        onImportComplete={async (res) => {
-          await refreshCatalog();
-          await loadStudioData();
-          setBanner({
-            type: 'success',
-            text: `Imported ${res.created.length} episode(s) (${res.skipped.length} skipped, ${res.invalid.length} invalid).`,
-          });
-        }}
-      />
     </div>
   );
 };

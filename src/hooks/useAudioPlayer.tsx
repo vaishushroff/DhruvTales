@@ -22,7 +22,12 @@ import {
   resolveEffectiveFormat,
   shouldTriggerChoicePoint,
 } from '../services/interactive/storyGraph';
-import { getMediaProvider, type MediaPlaybackResolution } from '../services/media';
+import {
+  buildDrivePreviewEmbedUrl,
+  extractDriveFileId,
+  getMediaProvider,
+  type MediaPlaybackResolution,
+} from '../services/media';
 import { useAppData } from './useAuthAndActivity';
 
 export const PLAYBACK_SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 2] as const;
@@ -44,6 +49,7 @@ interface AudioPlayerContextValue {
   canSwitchFormat: boolean;
   hasVideoFormat: boolean;
   activeVideoUrl: string | null;
+  activeEmbedUrl: string | null;
   isPlaying: boolean;
   isLoadingMedia: boolean;
   currentTime: number;
@@ -115,12 +121,16 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const mediaExpiresAtRef = useRef<number | null>(null);
   const refreshedExpiredUrlRef = useRef<string | null>(null);
   const isRefreshingSignedUrlRef = useRef<boolean>(false);
+  const fallbackCandidatesRef = useRef<string[]>([]);
+  const candidateIdxRef = useRef<number>(0);
+  const driveStallTimerRef = useRef<number | null>(null);
 
   const [currentStory, setCurrentStory] = useState<Story | null>(null);
   const [currentEpisode, setCurrentEpisode] = useState<Episode | null>(null);
   const [mediaResolution, setMediaResolution] = useState<MediaPlaybackResolution | null>(null);
   const [activeFormat, setActiveFormat] = useState<PlaybackFormat>('audio');
   const [activeVideoUrl, setActiveVideoUrl] = useState<string | null>(null);
+  const [activeEmbedUrl, setActiveEmbedUrl] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLoadingMedia, setIsLoadingMedia] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -142,6 +152,8 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const volumeRef = useRef<number>(0.9);
   const isMutedRef = useRef<boolean>(false);
   const isPlayingRef = useRef<boolean>(false);
+  const mediaResolutionRef = useRef<MediaPlaybackResolution | null>(null);
+  const activeEmbedUrlRef = useRef<string | null>(null);
 
   activeFormatRef.current = activeFormat;
   currentStoryRef.current = currentStory;
@@ -151,6 +163,8 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
   volumeRef.current = volume;
   isMutedRef.current = isMuted;
   isPlayingRef.current = isPlaying;
+  mediaResolutionRef.current = mediaResolution;
+  activeEmbedUrlRef.current = activeEmbedUrl;
 
   // Lazy-initialize single HTMLAudioElement instance
   if (!audioElRef.current && typeof Audio !== 'undefined') {
@@ -161,6 +175,112 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const getActiveMediaElement = useCallback((): HTMLMediaElement | null => {
     return activeFormatRef.current === 'video' ? videoElRef.current : audioElRef.current;
   }, []);
+
+  const clearDriveStallTimer = useCallback(() => {
+    if (driveStallTimerRef.current !== null && typeof window !== 'undefined') {
+      window.clearTimeout(driveStallTimerRef.current);
+      driveStallTimerRef.current = null;
+    }
+  }, []);
+
+  const activateEmbedFallbackIfAvailable = useCallback((): boolean => {
+    let embedUrl = mediaResolutionRef.current?.embedFallbackUrl ?? null;
+    if (!embedUrl) {
+      const ep = currentEpisodeRef.current;
+      if (ep) {
+        const formats = getEpisodeFormats(ep);
+        const activeRef =
+          activeFormatRef.current === 'video' && formats.videoRef
+            ? formats.videoRef
+            : formats.audioRef ?? ep.mediaRef;
+        const driveId = extractDriveFileId(activeRef.id);
+        if (driveId) {
+          embedUrl = buildDrivePreviewEmbedUrl(driveId);
+        }
+      }
+    }
+
+    if (!embedUrl) return false;
+
+    clearDriveStallTimer();
+    pendingHandoffRef.current = null;
+    audioElRef.current?.pause();
+    videoElRef.current?.pause();
+    setIsLoadingMedia(false);
+    setIsPlaying(false);
+    setErrorMessage(null);
+    setVideoError(null);
+    setActiveEmbedUrl(embedUrl);
+    activeEmbedUrlRef.current = embedUrl;
+    setIsExpanded(true);
+    return true;
+  }, [clearDriveStallTimer]);
+
+  const scheduleDriveStallCheck = useCallback(
+    (format: PlaybackFormat) => {
+      clearDriveStallTimer();
+      if (typeof window === 'undefined') return;
+      if (!mediaResolutionRef.current?.embedFallbackUrl) return;
+
+      driveStallTimerRef.current = window.setTimeout(() => {
+        driveStallTimerRef.current = null;
+        if (activeEmbedUrlRef.current) return;
+        if (activeFormatRef.current !== format) return;
+        const el = format === 'video' ? videoElRef.current : audioElRef.current;
+        if (!el || el.readyState >= 1) return;
+
+        const nextIdx = candidateIdxRef.current + 1;
+        const nextUrl = fallbackCandidatesRef.current[nextIdx];
+        if (nextUrl) {
+          candidateIdxRef.current = nextIdx;
+          if (pendingHandoffRef.current) {
+            pendingHandoffRef.current = { ...pendingHandoffRef.current, url: nextUrl };
+          }
+          if (format === 'video') {
+            setActiveVideoUrl(nextUrl);
+            el.setAttribute('src', nextUrl);
+          } else {
+            el.src = nextUrl;
+          }
+          el.load();
+          scheduleDriveStallCheck(format);
+          return;
+        }
+
+        activateEmbedFallbackIfAvailable();
+      }, 4200);
+    },
+    [activateEmbedFallbackIfAvailable, clearDriveStallTimer]
+  );
+
+  const tryNextMediaCandidate = useCallback(
+    (el: HTMLMediaElement | null, format: PlaybackFormat): boolean => {
+      const nextIdx = candidateIdxRef.current + 1;
+      const nextUrl = fallbackCandidatesRef.current[nextIdx];
+      if (!nextUrl || !el) return false;
+
+      candidateIdxRef.current = nextIdx;
+      if (pendingHandoffRef.current) {
+        pendingHandoffRef.current = { ...pendingHandoffRef.current, url: nextUrl };
+      }
+      if (format === 'video') {
+        setActiveVideoUrl(nextUrl);
+        el.setAttribute('src', nextUrl);
+      } else {
+        el.src = nextUrl;
+      }
+      el.load();
+      scheduleDriveStallCheck(format);
+      return true;
+    },
+    [scheduleDriveStallCheck]
+  );
+
+  useEffect(() => {
+    return () => {
+      clearDriveStallTimer();
+    };
+  }, [clearDriveStallTimer]);
 
   const formatInfo = useMemo(() => {
     if (!currentEpisode) {
@@ -265,14 +385,21 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
           el.playbackRate = handoff.playbackRate;
           setIsPlaying(true);
         })
-        .catch(() => {
+        .catch((err) => {
           setIsPlaying(false);
+          const errName = err instanceof Error ? err.name : '';
+          const errMsg = err instanceof Error ? err.message : '';
+          if (errName === 'NotSupportedError' || /no supported source/i.test(errMsg)) {
+            if (!tryNextMediaCandidate(el, expectedFormat)) {
+              activateEmbedFallbackIfAvailable();
+            }
+          }
         });
     } else {
       el.pause();
       setIsPlaying(false);
     }
-  }, []);
+  }, [activateEmbedFallbackIfAvailable, tryNextMediaCandidate]);
 
   const attachVideoElement = useCallback(
     (el: HTMLVideoElement | null) => {
@@ -325,6 +452,8 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
       setIsLoadingMedia(true);
       setErrorMessage(null);
       setVideoError(null);
+      setActiveEmbedUrl(null);
+      activeEmbedUrlRef.current = null;
 
       // Pause both elements before loading the target stream
       audioElRef.current?.pause();
@@ -333,8 +462,18 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
       const provider = getMediaProvider(mediaRef.provider);
       const resolution = await provider.getPlaybackUrl(mediaRef, profile, episode);
       setMediaResolution(resolution);
+      mediaResolutionRef.current = resolution;
       mediaExpiresAtRef.current = resolution.expiresAt ?? null;
       refreshedExpiredUrlRef.current = null;
+
+      const candidateSet = new Set<string>();
+      if (resolution.url) candidateSet.add(resolution.url);
+      for (const fallback of resolution.fallbackUrls ?? []) {
+        if (fallback) candidateSet.add(fallback);
+      }
+      fallbackCandidatesRef.current = Array.from(candidateSet);
+      candidateIdxRef.current = 0;
+      clearDriveStallTimer();
 
       const effectiveInitialDuration =
         typeof initialDurationSec === 'number' &&
@@ -372,6 +511,7 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
             applyPendingHandoff(video, 'video');
           }
         }
+        scheduleDriveStallCheck('video');
       } else {
         setActiveVideoUrl(null);
         const audio = audioElRef.current;
@@ -385,11 +525,12 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
             applyPendingHandoff(audio, 'audio');
           }
         }
+        scheduleDriveStallCheck('audio');
       }
 
       persistProgress(startSec, effectiveInitialDuration, false);
     },
-    [profile, persistProgress, applyPendingHandoff]
+    [profile, persistProgress, applyPendingHandoff, clearDriveStallTimer, scheduleDriveStallCheck]
   );
 
   const isSignedUrlExpiringSoon = useCallback((bufferMs = 20_000): boolean => {
@@ -641,6 +782,10 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const togglePlayPause = useCallback(async () => {
     if (activeChoicePoint) return;
+    if (activeEmbedUrlRef.current) {
+      setIsExpanded(true);
+      return;
+    }
     const el = getActiveMediaElement();
     if (!el || !currentEpisodeRef.current) return;
 
@@ -661,16 +806,36 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         await el.play();
         setIsPlaying(true);
       } catch (err) {
-        setErrorMessage(err instanceof Error ? err.message : 'Playback blocked by browser.');
+        const errName = err instanceof Error ? err.name : '';
+        const errMsg = err instanceof Error ? err.message : '';
+        if (errName === 'NotSupportedError' || /no supported source/i.test(errMsg)) {
+          if (tryNextMediaCandidate(el, activeFormatRef.current)) {
+            return;
+          }
+          if (activateEmbedFallbackIfAvailable()) {
+            return;
+          }
+          setErrorMessage(
+            'This episode media link could not be decoded. Make sure the file is shared as "Anyone with the link" or attach a direct HTTPS audio/video URL in Creator Studio.'
+          );
+          return;
+        }
+        if (errName === 'NotAllowedError') {
+          setErrorMessage('Tap Play again to start audio in your browser.');
+          return;
+        }
+        setErrorMessage('Playback could not start right now. Please try again.');
       }
     }
   }, [
+    activateEmbedFallbackIfAvailable,
     activeChoicePoint,
     currentTime,
     getActiveMediaElement,
     isSignedUrlExpiringSoon,
     persistProgress,
     refreshSignedStreamIfNeeded,
+    tryNextMediaCandidate,
   ]);
 
   const seekTo = useCallback(
@@ -881,6 +1046,9 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
   }, [currentStory, hasPrevious, storyEpisodes, currentIdx, playEpisode]);
 
   const closePlayer = useCallback(() => {
+    clearDriveStallTimer();
+    fallbackCandidatesRef.current = [];
+    candidateIdxRef.current = 0;
     const el = getActiveMediaElement();
     if (el) {
       el.pause();
@@ -895,8 +1063,10 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
     setCurrentEpisode(null);
     setMediaResolution(null);
     setActiveVideoUrl(null);
+    setActiveEmbedUrl(null);
+    activeEmbedUrlRef.current = null;
     setVideoError(null);
-  }, [getActiveMediaElement, persistProgress]);
+  }, [clearDriveStallTimer, getActiveMediaElement, persistProgress]);
 
   // Attach shared DOM event listeners to BOTH <audio> and <video>
   const bindMediaListeners = useCallback(
@@ -905,14 +1075,25 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
       const onLoadedMetadata = () => {
         if (!isCurrentFormat()) return;
+        clearDriveStallTimer();
         if (Number.isFinite(el.duration) && el.duration > 0) {
           setDuration(el.duration);
+          durationRef.current = el.duration;
         }
         applyPendingHandoff(el, format);
       };
 
+      const onDurationChange = () => {
+        if (!isCurrentFormat()) return;
+        if (Number.isFinite(el.duration) && el.duration > 0) {
+          setDuration(el.duration);
+          durationRef.current = el.duration;
+        }
+      };
+
       const onCanPlay = () => {
         if (!isCurrentFormat()) return;
+        clearDriveStallTimer();
         setIsLoadingMedia(false);
         applyPendingHandoff(el, format);
       };
@@ -972,14 +1153,16 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
       const onPlay = () => {
         if (!isCurrentFormat()) return;
+        clearDriveStallTimer();
         setIsPlaying(true);
         setIsLoadingMedia(false);
       };
 
       const onError = () => {
         if (!isCurrentFormat()) return;
+        if (activeEmbedUrlRef.current) return;
 
-        // If a short-lived Drive stream token expired mid-playback, transparently re-authorize once
+        // If a short-lived server-signed stream token expired mid-playback, transparently re-authorize once
         const ep = currentEpisodeRef.current;
         const formats = ep ? getEpisodeFormats(ep) : null;
         const activeRef =
@@ -989,9 +1172,10 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
               : formats.audioRef ?? ep.mediaRef
             : null;
 
-        if (activeRef?.provider === 'drive' && !isRefreshingSignedUrlRef.current) {
-          const currentSrc = el.getAttribute('src') ?? el.src ?? '';
-          if (currentSrc && refreshedExpiredUrlRef.current !== currentSrc) {
+        const currentSrc = el.getAttribute('src') ?? el.src ?? '';
+        const isSignedProxyUrl = currentSrc.includes('/api/media/stream');
+        if (activeRef?.provider === 'drive' && isSignedProxyUrl && !isRefreshingSignedUrlRef.current) {
+          if (refreshedExpiredUrlRef.current !== currentSrc) {
             void refreshSignedStreamIfNeeded({
               force: true,
               targetPos: Number.isFinite(el.currentTime) ? el.currentTime : 0,
@@ -1001,24 +1185,32 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
           }
         }
 
+        // First try remaining direct stream candidates (e.g. alternative Drive download/open URLs)
+        if (tryNextMediaCandidate(el, format)) {
+          return;
+        }
+
+        // Automatically switch Google Drive media to Google's universal embedded player (supports all formats, zero errors on static hosts!)
+        if (activateEmbedFallbackIfAvailable()) {
+          return;
+        }
+
+        clearDriveStallTimer();
         setIsLoadingMedia(false);
         setIsPlaying(false);
         if (format === 'video') {
           setVideoError(
-            activeRef?.provider === 'drive'
-              ? 'Unable to stream this Google Drive video right now (file missing, not shared, or Drive quota exceeded). Retry or switch to Audio.'
-              : 'Unable to load the video stream right now. You can retry or switch seamlessly to Audio mode.'
+            'Unable to load the video stream right now. Verify the file link is publicly accessible or switch to Audio.'
           );
         } else {
           setErrorMessage(
-            activeRef?.provider === 'drive'
-              ? 'Unable to stream this Google Drive audio right now (file missing, not shared, or Drive quota exceeded).'
-              : 'Audio stream encountered a playback error.'
+            'This episode audio link could not be loaded. Make sure the file is shared publicly ("Anyone with the link") or attach a direct HTTPS audio/video file URL in Creator Studio.'
           );
         }
       };
 
       el.addEventListener('loadedmetadata', onLoadedMetadata);
+      el.addEventListener('durationchange', onDurationChange);
       el.addEventListener('canplay', onCanPlay);
       el.addEventListener('waiting', onWaiting);
       el.addEventListener('timeupdate', onTimeUpdate);
@@ -1029,6 +1221,7 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
       return () => {
         el.removeEventListener('loadedmetadata', onLoadedMetadata);
+        el.removeEventListener('durationchange', onDurationChange);
         el.removeEventListener('canplay', onCanPlay);
         el.removeEventListener('waiting', onWaiting);
         el.removeEventListener('timeupdate', onTimeUpdate);
@@ -1039,11 +1232,14 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
       };
     },
     [
+      activateEmbedFallbackIfAvailable,
       applyPendingHandoff,
+      clearDriveStallTimer,
       persistProgress,
       playNextEpisode,
       refreshSignedStreamIfNeeded,
       triggerChoiceOverlayForEpisode,
+      tryNextMediaCandidate,
     ]
   );
 
@@ -1131,6 +1327,7 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         canSwitchFormat: formatInfo.canSwitch,
         hasVideoFormat: formatInfo.hasVideo,
         activeVideoUrl,
+        activeEmbedUrl,
         isPlaying,
         isLoadingMedia,
         currentTime,

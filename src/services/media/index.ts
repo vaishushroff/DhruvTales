@@ -25,15 +25,25 @@ export {
   DriveMediaProvider,
   importEpisodesFromDirectLinks,
   importEpisodesFromDriveFolder,
-  importEpisodesFromGoogleDriveDirect,
   type DriveFolderImportResult,
 } from './DriveProvider';
 export {
-  clearCachedDriveAccessToken,
-  connectGoogleDriveAccount,
-  getCachedDriveAccessToken,
-  listGoogleDriveFolders,
-} from './googleDriveClient';
-export { extractDriveFolderId, type ClientDriveFolderItem } from './googleDriveParser';
-export { parseBatchEpisodeLines } from './driveFallback';
+  buildDirectDrivePlaybackUrl,
+  buildDrivePreviewEmbedUrl,
+  extractDriveFileId,
+  isGoogleDriveFolderUrl,
+  normalizeDirectMediaUrl,
+  parseBatchEpisodeLines,
+  resolveCreatorMediaInput,
+} from './driveFallback';
+export {
+  buildDriveCandidateUrls,
+  formatRealDuration,
+  inferMimeTypeFromUrl,
+  isPlaceholderMediaRef,
+  probeMediaMetadata,
+  SUPPORTED_AUDIO_FORMAT_LABEL,
+  SUPPORTED_VIDEO_FORMAT_LABEL,
+  type MediaProbeResult,
+} from './mediaFormats';
 export type { MediaProvider, MediaPlaybackResolution, MediaUploadMetadata } from './MediaProvider';

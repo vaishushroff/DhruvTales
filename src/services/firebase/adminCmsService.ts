@@ -381,11 +381,11 @@ export async function adminSaveEpisodeCms(
   const titleHi = (form.titleHi.trim() || title).slice(0, 160);
   const mediaRef = {
     provider: form.provider,
-    id: (form.mediaId.trim() || id).slice(0, 160),
+    id: (form.mediaId.trim() || id).slice(0, 1024),
     type: form.mediaType,
   };
   const videoMediaRef = form.videoDriveId?.trim()
-    ? { provider: 'drive' as const, id: form.videoDriveId.trim().slice(0, 160), type: 'video' as const }
+    ? { provider: 'drive' as const, id: form.videoDriveId.trim().slice(0, 1024), type: 'video' as const }
     : form.mediaType === 'video'
       ? mediaRef
       : undefined;
@@ -398,7 +398,7 @@ export async function adminSaveEpisodeCms(
         titleHi,
         description: form.description.trim().slice(0, 600),
         descriptionHi: (form.descriptionHi.trim() || form.description.trim()).slice(0, 600),
-        durationSec: Math.max(10, Math.floor(form.durationSec)),
+        durationSec: Math.max(1, Math.floor(form.durationSec)),
         priceCoins: Math.max(0, Math.floor(form.priceCoins)),
         mediaRef,
       };
@@ -414,7 +414,7 @@ export async function adminSaveEpisodeCms(
         titleHi,
         description: form.description.trim().slice(0, 600),
         descriptionHi: (form.descriptionHi.trim() || form.description.trim()).slice(0, 600),
-        durationSec: Math.max(10, Math.floor(form.durationSec)),
+        durationSec: Math.max(1, Math.floor(form.durationSec)),
         priceCoins: Math.max(0, Math.floor(form.priceCoins)),
         mediaRef,
         isDeleted: false,

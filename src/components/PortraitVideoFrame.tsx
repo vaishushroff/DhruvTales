@@ -3,17 +3,19 @@ import type { VideoAspectFormat } from '../services/media/portraitVideo';
 
 interface PortraitVideoFrameProps {
   children: React.ReactNode;
-  /** Output aspect ratio matching the creator/admin uploaded video ('9:16' or '16:9') */
+  /** Coarse orientation fallback when natural dimensions are not yet loaded */
   aspect?: VideoAspectFormat;
+  /** Exact natural aspect ratio (videoWidth / videoHeight) so original video shape is never cropped or trimmed */
+  naturalAspectRatio?: number | null;
   /** Optional custom CSS class for the inner video frame */
   frameClassName?: string;
   /** Optional custom CSS class for the centering stage wrapper */
   hostClassName?: string;
   /** Optional test ID applied to the video frame box itself */
   frameTestId?: string;
-  /** Optional CSS variable override for maximum height (e.g. '320px', 'calc(100dvh - 13rem)') */
+  /** Optional CSS variable override for maximum height */
   maxHeightCss?: string;
-  /** Optional CSS variable override for maximum width (e.g. '440px', '860px') */
+  /** Optional CSS variable override for maximum width */
   maxWidthCss?: string;
   /** Optional ref attached to the fullscreen host container */
   hostRef?: React.Ref<HTMLDivElement>;
@@ -25,12 +27,14 @@ interface PortraitVideoFrameProps {
 }
 
 /**
- * Shared adaptive video presentation container supporting both 9:16 portrait
- * and 16:9 landscape videos so playback always matches the creator's upload format.
+ * Adaptive video presentation container that preserves the exact original size and
+ * natural aspect ratio of any uploaded video (9:16, 16:9, 1:1, 4:3, 4:5, 21:9, etc.)
+ * with zero cropping or trimming.
  */
 export const PortraitVideoFrame: React.FC<PortraitVideoFrameProps> = ({
   children,
-  aspect = '9:16',
+  aspect = '16:9',
+  naturalAspectRatio = null,
   frameClassName = '',
   hostClassName = '',
   frameTestId = 'portrait-video-frame',
@@ -43,18 +47,38 @@ export const PortraitVideoFrame: React.FC<PortraitVideoFrameProps> = ({
   onMouseLeave,
   onClick,
 }) => {
-  const isLandscape = aspect === '16:9';
+  const hasNaturalRatio =
+    typeof naturalAspectRatio === 'number' &&
+    Number.isFinite(naturalAspectRatio) &&
+    naturalAspectRatio > 0.1 &&
+    naturalAspectRatio < 10;
+
+  const isLandscape = hasNaturalRatio ? naturalAspectRatio >= 1 : aspect === '16:9';
+
   const frameStyle = (
-    isLandscape
+    hasNaturalRatio
       ? {
-          ...(maxHeightCss ? { '--dt-landscape-max-h': maxHeightCss } : {}),
-          ...(maxWidthCss ? { '--dt-landscape-max-w': maxWidthCss } : {}),
+          '--dt-natural-aspect': `${naturalAspectRatio}`,
+          '--dt-natural-aspect-num': `${naturalAspectRatio}`,
+          ...(maxHeightCss ? { '--dt-natural-max-h': maxHeightCss } : {}),
+          ...(maxWidthCss ? { '--dt-natural-max-w': maxWidthCss } : {}),
         }
-      : {
-          ...(maxHeightCss ? { '--dt-portrait-max-h': maxHeightCss } : {}),
-          ...(maxWidthCss ? { '--dt-portrait-max-w': maxWidthCss } : {}),
-        }
+      : isLandscape
+        ? {
+            ...(maxHeightCss ? { '--dt-landscape-max-h': maxHeightCss } : {}),
+            ...(maxWidthCss ? { '--dt-landscape-max-w': maxWidthCss } : {}),
+          }
+        : {
+            ...(maxHeightCss ? { '--dt-portrait-max-h': maxHeightCss } : {}),
+            ...(maxWidthCss ? { '--dt-portrait-max-w': maxWidthCss } : {}),
+          }
   ) as React.CSSProperties;
+
+  const frameClass = hasNaturalRatio
+    ? 'dt-natural-video-frame'
+    : isLandscape
+      ? 'dt-landscape-video-frame'
+      : 'dt-portrait-video-frame';
 
   return (
     <div
@@ -68,11 +92,9 @@ export const PortraitVideoFrame: React.FC<PortraitVideoFrameProps> = ({
     >
       <div
         data-testid={frameTestId}
-        data-video-aspect={aspect}
+        data-video-aspect={hasNaturalRatio ? `${naturalAspectRatio.toFixed(3)}` : aspect}
         style={frameStyle}
-        className={`${
-          isLandscape ? 'dt-landscape-video-frame' : 'dt-portrait-video-frame'
-        } rounded-2xl ring-1 ring-white/10 shadow-2xl shadow-black/75 select-none ${frameClassName}`.trim()}
+        className={`${frameClass} rounded-2xl ring-1 ring-white/10 shadow-2xl shadow-black/75 select-none ${frameClassName}`.trim()}
       >
         {children}
       </div>

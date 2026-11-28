@@ -47,6 +47,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     currentStory,
     currentEpisode,
     activeVideoUrl,
+    activeEmbedUrl,
     canSwitchFormat,
     isPlaying,
     isLoadingMedia,
@@ -77,6 +78,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isPiPActive, setIsPiPActive] = useState(false);
   const [detectedAspect, setDetectedAspect] = useState<VideoAspectFormat>('9:16');
+  const [naturalAspectRatio, setNaturalAspectRatio] = useState<number | null>(null);
 
   const supportsPiP =
     typeof document !== 'undefined' &&
@@ -86,6 +88,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const syncAspectFromVideo = useCallback((el: HTMLVideoElement | null) => {
     if (!el || el.videoWidth <= 0 || el.videoHeight <= 0) return;
     setDetectedAspect(detectVideoAspectFormat(el.videoWidth, el.videoHeight));
+    setNaturalAspectRatio(el.videoWidth / el.videoHeight);
   }, []);
 
   const handleVideoRef = useCallback(
@@ -100,6 +103,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   );
 
   useEffect(() => {
+    setNaturalAspectRatio(null);
     const video = localVideoRef.current;
     if (video && video.readyState >= 1 && video.videoWidth > 0 && video.videoHeight > 0) {
       syncAspectFromVideo(video);
@@ -262,12 +266,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     );
   }
 
+  const isLandscapeOrWide =
+    naturalAspectRatio !== null ? naturalAspectRatio >= 1 : detectedAspect === '16:9';
+
   return (
     <PortraitVideoFrame
       hostRef={containerRef}
       aspect={detectedAspect}
+      naturalAspectRatio={naturalAspectRatio}
       maxHeightCss={maxHeightCss}
-      maxWidthCss={detectedAspect === '16:9' ? landscapeMaxWidthCss : maxWidthCss}
+      maxWidthCss={isLandscapeOrWide ? landscapeMaxWidthCss : maxWidthCss}
       frameTestId="portrait-video-frame"
       frameClassName="group"
       onMouseMove={scheduleHideControls}
@@ -279,10 +287,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         }
       }}
     >
-      {videoElement}
+      {activeEmbedUrl ? (
+        <iframe
+          src={activeEmbedUrl}
+          title={currentEpisode ? `${currentEpisode.title} video player` : 'Video player'}
+          allow="autoplay; encrypted-media; fullscreen"
+          allowFullScreen
+          className="w-full h-full border-0 bg-black"
+        />
+      ) : (
+        videoElement
+      )}
 
       {/* Loading Spinner */}
-      {isLoadingMedia && !videoError && (
+      {!activeEmbedUrl && isLoadingMedia && !videoError && (
         <div
           aria-live="polite"
           className="absolute inset-0 flex flex-col items-center justify-center bg-black/55 backdrop-blur-[2px] pointer-events-none"
@@ -328,8 +346,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </div>
       )}
 
-      {/* Auto-Hiding Top Utility Bar (Volume & PiP — hidden while ChoiceOverlay is active) */}
-      {!videoError && !activeChoicePoint && (
+      {/* Auto-Hiding Top Utility Bar (Volume & PiP — hidden while ChoiceOverlay or embed player is active) */}
+      {!activeEmbedUrl && !videoError && !activeChoicePoint && (
         <div
           data-testid="video-top-controls"
           className={`absolute inset-x-0 top-0 bg-gradient-to-b from-black/80 via-black/35 to-transparent px-2.5 pt-2.5 pb-6 flex items-center justify-between gap-2 transition-opacity duration-300 ${
@@ -379,8 +397,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </div>
       )}
 
-      {/* Auto-Hiding Bottom Portrait Controls Overlay (hidden while ChoiceOverlay is active) */}
-      {!videoError && !activeChoicePoint && (
+      {/* Auto-Hiding Bottom Portrait Controls Overlay (hidden while ChoiceOverlay or embed player is active) */}
+      {!activeEmbedUrl && !videoError && !activeChoicePoint && (
         <div
           data-testid="video-bottom-controls"
           className={`absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/95 via-black/70 to-transparent px-2.5 pt-10 pb-2.5 transition-opacity duration-300 ${

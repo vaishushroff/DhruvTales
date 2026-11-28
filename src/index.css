@@ -158,8 +158,24 @@ input[type="range"].dt-range:focus-visible {
   flex-shrink: 0;
 }
 
+.dt-natural-video-frame {
+  position: relative;
+  aspect-ratio: var(--dt-natural-aspect, 16 / 9);
+  width: min(
+    100%,
+    var(--dt-natural-max-w, 860px),
+    calc(var(--dt-natural-max-h, 68dvh) * var(--dt-natural-aspect-num, 1.7778))
+  );
+  max-width: 100%;
+  max-height: var(--dt-natural-max-h, 68dvh);
+  background-color: #000000;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
 .dt-portrait-video-frame video,
-.dt-landscape-video-frame video {
+.dt-landscape-video-frame video,
+.dt-natural-video-frame video {
   width: 100%;
   height: 100%;
   object-fit: contain;
@@ -167,9 +183,10 @@ input[type="range"].dt-range:focus-visible {
   display: block;
 }
 
-/* Keep native HTML5 captions legible inside both 9:16 and 16:9 frames */
+/* Keep native HTML5 captions legible inside all video frames */
 .dt-portrait-video-frame video::cue,
-.dt-landscape-video-frame video::cue {
+.dt-landscape-video-frame video::cue,
+.dt-natural-video-frame video::cue {
   background-color: rgba(11, 11, 14, 0.82);
   color: #F5F3EE;
   font-family: var(--font-sans);
@@ -177,7 +194,7 @@ input[type="range"].dt-range:focus-visible {
   line-height: 1.4;
 }
 
-/* Fullscreen: pure dark backdrop preserving the video's native 9:16 or 16:9 aspect ratio */
+/* Fullscreen: pure dark backdrop preserving the video's exact original aspect ratio */
 .dt-portrait-fullscreen-host:fullscreen,
 .dt-portrait-fullscreen-host:-webkit-full-screen {
   width: 100vw;
@@ -207,6 +224,17 @@ input[type="range"].dt-range:focus-visible {
 .dt-portrait-fullscreen-host:-webkit-full-screen .dt-landscape-video-frame {
   width: min(100vw, calc(100vh * 16 / 9));
   height: min(100vh, calc(100vw * 9 / 16));
+  max-width: 100vw;
+  max-height: 100vh;
+  border-radius: 0;
+  border-width: 0;
+  box-shadow: none;
+}
+
+.dt-portrait-fullscreen-host:fullscreen .dt-natural-video-frame,
+.dt-portrait-fullscreen-host:-webkit-full-screen .dt-natural-video-frame {
+  width: min(100vw, calc(100vh * var(--dt-natural-aspect-num, 1.7778)));
+  height: min(100vh, calc(100vw / var(--dt-natural-aspect-num, 1.7778)));
   max-width: 100vw;
   max-height: 100vh;
   border-radius: 0;

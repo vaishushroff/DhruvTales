@@ -29,6 +29,7 @@ export const AudioPlayerBar: React.FC = () => {
     mediaResolution,
     activeFormat,
     canSwitchFormat,
+    activeEmbedUrl,
     isPlaying,
     isLoadingMedia,
     currentTime,
@@ -405,7 +406,38 @@ export const AudioPlayerBar: React.FC = () => {
 
             {/* Audio Transport Controls (shown in audio mode, plus episode navigation in both modes) */}
             <div className={activeFormat === 'video' ? 'space-y-2 pb-1 shrink-0' : 'space-y-5 pb-4'}>
-              {activeFormat === 'audio' && (
+              {activeFormat === 'audio' && activeEmbedUrl ? (
+                <div className="space-y-4">
+                  <div className="rounded-2xl overflow-hidden bg-[#141418] border border-white/15 shadow-lg">
+                    <iframe
+                      src={activeEmbedUrl}
+                      title={`${epTitle} audio player`}
+                      allow="autoplay; encrypted-media; fullscreen"
+                      className="w-full h-[140px] border-0 bg-[#141418]"
+                    />
+                  </div>
+                  <div className="flex items-center justify-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => void playPreviousEpisode()}
+                      disabled={!hasPrevious}
+                      className="min-h-[44px] px-4 rounded-xl bg-[#141418] border border-white/10 text-xs text-[#F5F3EE] disabled:opacity-35 inline-flex items-center gap-1.5 hover:border-white/25 transition-colors"
+                    >
+                      <SkipBack className="w-3.5 h-3.5" aria-hidden="true" />
+                      {t('player.prevEpisode')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void playNextEpisode()}
+                      disabled={!hasNext}
+                      className="min-h-[44px] px-4 rounded-xl bg-[#141418] border border-white/10 text-xs text-[#F5F3EE] disabled:opacity-35 inline-flex items-center gap-1.5 hover:border-white/25 transition-colors"
+                    >
+                      {t('player.nextEpisode')}
+                      <SkipForward className="w-3.5 h-3.5" aria-hidden="true" />
+                    </button>
+                  </div>
+                </div>
+              ) : activeFormat === 'audio' && (
                 <>
                   {/* Seek Slider */}
                   <div className="space-y-2">
