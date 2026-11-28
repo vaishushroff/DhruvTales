@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { resolveDriveServiceAccountCreds } from './driveServiceAccount';
 import type { StreamFormat } from './mediaToken';
 
 export interface ProxyStreamTokenPayload {
@@ -10,15 +11,28 @@ export interface ProxyStreamTokenPayload {
 
 const PROXY_TOKEN_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
-// Ephemeral CSPRNG fallback when MEDIA_SIGNING_SECRET is not configured in env
-const EPHEMERAL_FALLBACK_KEY = crypto.randomBytes(32);
+// Lazily initialized only inside request handlers (never at top-level module import)
+let lazyEphemeralFallbackKey: Buffer | null = null;
 
 function getProxyAesKey(): Buffer {
   const configured = process.env.MEDIA_SIGNING_SECRET?.trim();
   if (configured && configured.length >= 16) {
-    return crypto.createHash('sha256').update(configured, 'utf8').digest();
+    return crypto
+      .createHash('sha256')
+      .update(`dhruv-tales:media-proxy:v1:${configured}`, 'utf8')
+      .digest();
   }
-  return EPHEMERAL_FALLBACK_KEY;
+  const saCreds = resolveDriveServiceAccountCreds(process.env);
+  if (saCreds) {
+    return crypto
+      .createHash('sha256')
+      .update(`dhruv-tales:media-proxy-sa:v1:${saCreds.clientEmail}:${saCreds.privateKey}`, 'utf8')
+      .digest();
+  }
+  if (!lazyEphemeralFallbackKey) {
+    lazyEphemeralFallbackKey = crypto.randomBytes(32);
+  }
+  return lazyEphemeralFallbackKey;
 }
 
 function toBase64Url(input: Buffer | Uint8Array): string {

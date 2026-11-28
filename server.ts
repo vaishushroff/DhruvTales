@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 import fs from 'node:fs';
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { applyCorsHeaders } from './api/_lib/cors';
 import adminAnalyticsHandler from './api/admin/analytics';
@@ -351,7 +352,9 @@ export async function startPortableServer(options?: {
   const apiOnly = options?.apiOnly ?? process.env.API_ONLY === 'true';
   const port = options?.port ?? Number(process.env.PORT || 3000);
   const host = options?.host ?? process.env.HOST ?? '0.0.0.0';
-  const distDir = path.resolve(import.meta.dirname, 'dist');
+  const serverFilename = fileURLToPath(import.meta.url);
+  const serverDirname = path.dirname(serverFilename);
+  const distDir = path.resolve(serverDirname, 'dist');
 
   let viteMiddleware: ((req: IncomingMessage, res: ServerResponse, next: () => void) => void) | null =
     null;
@@ -437,9 +440,10 @@ export async function startPortableServer(options?: {
 }
 
 // Start directly when executed as main entry (`tsx server.ts` or `tsx server.ts --prod`)
+const currentServerFilename = fileURLToPath(import.meta.url);
 const isDirectRun =
   process.argv[1] &&
-  path.resolve(process.argv[1]) === path.resolve(import.meta.filename);
+  path.resolve(process.argv[1]) === path.resolve(currentServerFilename);
 
 if (isDirectRun) {
   void startPortableServer().catch((err) => {
