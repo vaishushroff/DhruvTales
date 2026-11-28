@@ -26,10 +26,8 @@ export const AudioPlayerBar: React.FC = () => {
   const {
     currentStory,
     currentEpisode,
-    mediaResolution,
     activeFormat,
     canSwitchFormat,
-    activeEmbedUrl,
     isPlaying,
     isLoadingMedia,
     currentTime,
@@ -72,10 +70,6 @@ export const AudioPlayerBar: React.FC = () => {
   const epTitle = lang === 'hi' ? currentEpisode.titleHi : currentEpisode.title;
   const safeDuration = Math.max(1, duration || currentEpisode.durationSec);
   const progressPct = Math.min(100, (currentTime / safeDuration) * 100);
-  const activeMediaRef =
-    activeFormat === 'video' && currentEpisode.videoMediaRef
-      ? currentEpisode.videoMediaRef
-      : currentEpisode.audioRef ?? currentEpisode.mediaRef;
 
   return (
     <>
@@ -84,7 +78,8 @@ export const AudioPlayerBar: React.FC = () => {
         <aside
           aria-label={t('player.nowPlaying')}
           data-testid="mini-player"
-          className="fixed mini-player-mobile-offset left-0 right-0 z-40 bg-[#141418]/95 backdrop-blur-md border-t border-white/10"
+          onContextMenu={(e) => e.preventDefault()}
+          className="fixed mini-player-mobile-offset left-0 right-0 z-40 bg-[#141418]/95 backdrop-blur-md border-t border-white/10 select-none"
         >
           {/* Thin top progress hairline */}
           <div className="h-[2px] w-full bg-white/10">
@@ -223,9 +218,10 @@ export const AudioPlayerBar: React.FC = () => {
           aria-label={t('player.nowPlaying')}
           aria-hidden={!isExpanded}
           data-testid="full-player-dialog"
+          onContextMenu={(e) => e.preventDefault()}
           className={
             isExpanded
-              ? 'fixed inset-0 z-50 h-[100dvh] bg-[#0B0B0E]/98 backdrop-blur-xl overflow-y-auto overflow-x-hidden safe-top safe-bottom'
+              ? 'fixed inset-0 z-50 h-[100dvh] bg-[#0B0B0E]/98 backdrop-blur-xl overflow-y-auto overflow-x-hidden safe-top safe-bottom select-none'
               : 'fixed -left-[9999px] top-0 w-[180px] h-[320px] overflow-hidden opacity-0 pointer-events-none'
           }
         >
@@ -406,38 +402,7 @@ export const AudioPlayerBar: React.FC = () => {
 
             {/* Audio Transport Controls (shown in audio mode, plus episode navigation in both modes) */}
             <div className={activeFormat === 'video' ? 'space-y-2 pb-1 shrink-0' : 'space-y-5 pb-4'}>
-              {activeFormat === 'audio' && activeEmbedUrl ? (
-                <div className="space-y-4">
-                  <div className="rounded-2xl overflow-hidden bg-[#141418] border border-white/15 shadow-lg">
-                    <iframe
-                      src={activeEmbedUrl}
-                      title={`${epTitle} audio player`}
-                      allow="autoplay; encrypted-media; fullscreen"
-                      className="w-full h-[140px] border-0 bg-[#141418]"
-                    />
-                  </div>
-                  <div className="flex items-center justify-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => void playPreviousEpisode()}
-                      disabled={!hasPrevious}
-                      className="min-h-[44px] px-4 rounded-xl bg-[#141418] border border-white/10 text-xs text-[#F5F3EE] disabled:opacity-35 inline-flex items-center gap-1.5 hover:border-white/25 transition-colors"
-                    >
-                      <SkipBack className="w-3.5 h-3.5" aria-hidden="true" />
-                      {t('player.prevEpisode')}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void playNextEpisode()}
-                      disabled={!hasNext}
-                      className="min-h-[44px] px-4 rounded-xl bg-[#141418] border border-white/10 text-xs text-[#F5F3EE] disabled:opacity-35 inline-flex items-center gap-1.5 hover:border-white/25 transition-colors"
-                    >
-                      {t('player.nextEpisode')}
-                      <SkipForward className="w-3.5 h-3.5" aria-hidden="true" />
-                    </button>
-                  </div>
-                </div>
-              ) : activeFormat === 'audio' && (
+              {activeFormat === 'audio' && (
                 <>
                   {/* Seek Slider */}
                   <div className="space-y-2">
@@ -583,29 +548,6 @@ export const AudioPlayerBar: React.FC = () => {
                   )}
                 </div>
               )}
-
-              {/* Transparent MediaProvider metadata */}
-              <div
-                className={`rounded-xl bg-[#141418] border border-white/[0.08] text-xs text-[#A39E93] ${
-                  activeFormat === 'video' ? 'px-3 py-1.5' : 'px-4 py-3 space-y-1'
-                }`}
-              >
-                <div
-                  className={`flex items-center justify-between gap-2 ${
-                    activeFormat === 'video' ? 'flex-nowrap' : 'flex-wrap'
-                  }`}
-                >
-                  <span className="shrink-0">{t('player.providerLabel')}</span>
-                  <span className="font-mono-tabular text-[#F5F3EE] text-[11px] truncate min-w-0">
-                    {activeMediaRef.provider} · {activeMediaRef.type} · {activeMediaRef.id}
-                  </span>
-                </div>
-                {activeFormat === 'audio' && mediaResolution?.label && (
-                  <p className="text-[11px] text-[#9B968B]">
-                    {mediaResolution.label}
-                  </p>
-                )}
-              </div>
             </div>
           </div>
         </div>

@@ -1,7 +1,7 @@
 import type { MediaRef } from '../../types';
+import { resolveApiUrl } from '../api/apiClient';
 import {
   buildDirectDrivePlaybackUrl,
-  buildDrivePreviewEmbedUrl,
   extractDriveFileId,
   normalizeDirectMediaUrl,
 } from './driveFallback';
@@ -111,6 +111,49 @@ export function formatRealDuration(seconds: number): string {
   return `${mins}:${String(secs).padStart(2, '0')}`;
 }
 
+export interface ProtectedProxyStreamInfo {
+  url: string;
+  expiresAt?: number;
+  mimeType?: string;
+}
+
+/**
+ * Exchanges a Google Drive ID/link or external HTTPS media URL for a short-lived,
+ * HMAC-signed same-origin `/api/media/proxy?token=...` stream URL.
+ * Works on both Node/Vercel/Cloud Run (`server.ts`) and Cloudflare Workers (`worker.ts`).
+ */
+export async function requestProtectedProxyUrl(
+  mediaId: string,
+  format: 'audio' | 'video'
+): Promise<ProtectedProxyStreamInfo | null> {
+  const trimmed = mediaId.trim();
+  if (!trimmed) return null;
+
+  try {
+    const res = await fetch(resolveApiUrl('/api/media/proxy-token'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mediaId: trimmed, format }),
+    });
+    if (!res.ok) return null;
+    const ct = res.headers.get('content-type') || '';
+    if (!ct.includes('application/json')) return null;
+    const data = (await res.json()) as {
+      url?: string;
+      expiresAt?: number;
+      mimeType?: string;
+    };
+    if (!data.url || !data.url.startsWith('/api/media/proxy')) return null;
+    return {
+      url: resolveApiUrl(data.url),
+      expiresAt: typeof data.expiresAt === 'number' ? data.expiresAt : undefined,
+      mimeType: data.mimeType,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export type MediaProbeResult =
   | {
       status: 'verified';
@@ -118,11 +161,6 @@ export type MediaProbeResult =
       width?: number;
       height?: number;
       resolvedUrl: string;
-    }
-  | {
-      status: 'embed_only';
-      durationSec: null;
-      embedUrl: string;
     }
   | {
       status: 'unverified';
@@ -234,37 +272,45 @@ function probeSingleUrlInBrowser(
  */
 export async function probeMediaMetadata(
   mediaRef: MediaRef,
-  timeoutPerCandidateMs = 5500
+  timeoutPerCandidateMs = 9000
 ): Promise<MediaProbeResult> {
   const driveId =
     mediaRef.provider === 'drive'
       ? extractDriveFileId(mediaRef.id) ?? mediaRef.id.trim()
       : extractDriveFileId(mediaRef.id);
 
-  if (driveId) {
-    const candidates = buildDriveCandidateUrls(driveId);
-    for (const candidateUrl of candidates) {
-      try {
-        const meta = await probeSingleUrlInBrowser(
-          candidateUrl,
-          mediaRef.type,
-          timeoutPerCandidateMs
-        );
+  // 1. Prefer probing through our protected same-origin Range proxy (reads real duration & dimensions for Drive & external URLs!)
+  const proxied = await requestProtectedProxyUrl(driveId ?? mediaRef.id, mediaRef.type);
+  if (proxied?.url) {
+    try {
+      const meta = await probeSingleUrlInBrowser(
+        proxied.url,
+        mediaRef.type,
+        timeoutPerCandidateMs
+      );
+      return {
+        status: 'verified',
+        durationSec: meta.durationSec,
+        width: meta.width,
+        height: meta.height,
+        resolvedUrl: proxied.url,
+      };
+    } catch {
+      if (driveId) {
         return {
-          status: 'verified',
-          durationSec: meta.durationSec,
-          width: meta.width,
-          height: meta.height,
-          resolvedUrl: candidateUrl,
+          status: 'unverified',
+          reason:
+            'Could not read audio/video metadata from this Google Drive file. Make sure sharing is set to "Anyone with the link" (Viewer) and that it is a real audio or video file.',
         };
-      } catch {
-        // Try next candidate URL
       }
     }
+  }
+
+  if (driveId) {
     return {
-      status: 'embed_only',
-      durationSec: null,
-      embedUrl: buildDrivePreviewEmbedUrl(driveId),
+      status: 'unverified',
+      reason:
+        'Could not inspect this Google Drive file. Confirm the file is shared as "Anyone with the link" and is a valid audio or video file.',
     };
   }
 
@@ -280,7 +326,7 @@ export async function probeMediaMetadata(
     const meta = await probeSingleUrlInBrowser(
       normalizedUrl,
       mediaRef.type,
-      timeoutPerCandidateMs + 2500
+      timeoutPerCandidateMs
     );
     return {
       status: 'verified',

@@ -11,9 +11,13 @@ import coinsPricingHandler from './api/coins/pricing';
 import coinsPurchaseHandler from './api/coins/purchase';
 import coinsUnlockHandler from './api/coins/unlock';
 import coinsWalletHandler from './api/coins/wallet';
+import driveBrowseHandler from './api/drive/browse';
+import driveResolvePathHandler from './api/drive/resolve-path';
 import healthHandler from './api/health';
 import mediaAuthorizeHandler from './api/media/authorize';
 import mediaImportFolderHandler from './api/media/import-folder';
+import mediaProxyHandler from './api/media/proxy';
+import mediaProxyTokenHandler from './api/media/proxy-token';
 import mediaStreamHandler from './api/media/stream';
 import sessionAdminHandler from './api/session/admin';
 import sessionLogoutHandler from './api/session/logout';
@@ -34,8 +38,12 @@ const API_ROUTES: Record<string, ApiHandler> = {
   '/api/coins/purchase': coinsPurchaseHandler,
   '/api/coins/unlock': coinsUnlockHandler,
   '/api/coins/wallet': coinsWalletHandler,
+  '/api/drive/browse': driveBrowseHandler,
+  '/api/drive/resolve-path': driveResolvePathHandler,
   '/api/media/authorize': mediaAuthorizeHandler,
   '/api/media/import-folder': mediaImportFolderHandler,
+  '/api/media/proxy': mediaProxyHandler,
+  '/api/media/proxy-token': mediaProxyTokenHandler,
   '/api/media/stream': mediaStreamHandler,
   '/api/session/admin': sessionAdminHandler,
   '/api/session/logout': sessionLogoutHandler,

@@ -508,18 +508,7 @@ export const AdminEpisodeEditorModal: React.FC<EpisodeModalProps> = ({
           </label>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-          <label className="space-y-1">
-            <span className="text-[#A39E93]">Media Provider</span>
-            <select
-              value={provider}
-              onChange={(e) => setProvider(e.target.value as 'demo' | 'drive')}
-              className="w-full min-h-[38px] px-2.5 rounded-lg bg-[#0B0B0E] border border-white/12 text-[#F5F3EE]"
-            >
-              <option value="demo">Demo</option>
-              <option value="drive">Google Drive</option>
-            </select>
-          </label>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
           <label className="space-y-1">
             <span className="text-[#A39E93]">Format</span>
             <select
@@ -532,11 +521,14 @@ export const AdminEpisodeEditorModal: React.FC<EpisodeModalProps> = ({
             </select>
           </label>
           <label className="space-y-1">
-            <span className="text-[#A39E93]">Media / Drive File ID</span>
+            <span className="text-[#A39E93]">Google Drive File ID</span>
             <input
               value={mediaId}
-              onChange={(e) => setMediaId(e.target.value)}
-              placeholder="demo-id or Drive file ID"
+              onChange={(e) => {
+                setProvider('drive');
+                setMediaId(e.target.value);
+              }}
+              placeholder="Google Drive file ID"
               className="w-full min-h-[38px] px-3 rounded-lg bg-[#0B0B0E] border border-white/12 text-[#F5F3EE]"
             />
           </label>

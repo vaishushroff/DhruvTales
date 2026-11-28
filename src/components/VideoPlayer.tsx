@@ -47,7 +47,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     currentStory,
     currentEpisode,
     activeVideoUrl,
-    activeEmbedUrl,
     canSwitchFormat,
     isPlaying,
     isLoadingMedia,
@@ -229,7 +228,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       src={activeVideoUrl ?? undefined}
       poster={sanitizeSafeUrl(currentStory?.coverUrl || currentStory?.backdropUrl)}
       playsInline
+      controlsList="nodownload"
       preload="metadata"
+      onContextMenu={(e) => e.preventDefault()}
       onLoadedMetadata={(e) => syncAspectFromVideo(e.currentTarget)}
       onClick={
         !compact
@@ -239,7 +240,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             }
           : undefined
       }
-      className="w-full h-full object-contain bg-black"
+      className="w-full h-full object-contain bg-black select-none"
       aria-label={currentEpisode ? `${currentEpisode.title} video player` : 'Video player'}
     />
   );
@@ -287,20 +288,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         }
       }}
     >
-      {activeEmbedUrl ? (
-        <iframe
-          src={activeEmbedUrl}
-          title={currentEpisode ? `${currentEpisode.title} video player` : 'Video player'}
-          allow="autoplay; encrypted-media; fullscreen"
-          allowFullScreen
-          className="w-full h-full border-0 bg-black"
-        />
-      ) : (
-        videoElement
-      )}
+      {videoElement}
 
       {/* Loading Spinner */}
-      {!activeEmbedUrl && isLoadingMedia && !videoError && (
+      {isLoadingMedia && !videoError && (
         <div
           aria-live="polite"
           className="absolute inset-0 flex flex-col items-center justify-center bg-black/55 backdrop-blur-[2px] pointer-events-none"
@@ -346,8 +337,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </div>
       )}
 
-      {/* Auto-Hiding Top Utility Bar (Volume & PiP — hidden while ChoiceOverlay or embed player is active) */}
-      {!activeEmbedUrl && !videoError && !activeChoicePoint && (
+      {/* Auto-Hiding Top Utility Bar (Volume & PiP — hidden while ChoiceOverlay is active) */}
+      {!videoError && !activeChoicePoint && (
         <div
           data-testid="video-top-controls"
           className={`absolute inset-x-0 top-0 bg-gradient-to-b from-black/80 via-black/35 to-transparent px-2.5 pt-2.5 pb-6 flex items-center justify-between gap-2 transition-opacity duration-300 ${
@@ -397,8 +388,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </div>
       )}
 
-      {/* Auto-Hiding Bottom Portrait Controls Overlay (hidden while ChoiceOverlay or embed player is active) */}
-      {!activeEmbedUrl && !videoError && !activeChoicePoint && (
+      {/* Auto-Hiding Bottom Portrait Controls Overlay (hidden while ChoiceOverlay is active) */}
+      {!videoError && !activeChoicePoint && (
         <div
           data-testid="video-bottom-controls"
           className={`absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/95 via-black/70 to-transparent px-2.5 pt-10 pb-2.5 transition-opacity duration-300 ${

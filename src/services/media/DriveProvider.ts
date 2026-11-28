@@ -6,13 +6,12 @@ import { resolveApiUrl } from '../api/apiClient';
 import { auth, db, handleFirestoreError, OperationType } from '../firebase/config';
 import { slugify } from '../studio/studioAnalytics';
 import {
-  buildDrivePreviewEmbedUrl,
   extractDriveFileId,
   isStaticHostApiUnavailable,
   normalizeDirectMediaUrl,
   parseBatchEpisodeLines,
 } from './driveFallback';
-import { buildDriveCandidateUrls, inferMimeTypeFromUrl } from './mediaFormats';
+import { inferMimeTypeFromUrl, requestProtectedProxyUrl } from './mediaFormats';
 import type {
   MediaPlaybackResolution,
   MediaProvider,
@@ -176,40 +175,49 @@ async function getOptionalFirebaseIdToken(): Promise<string | null> {
   }
 }
 
-function resolveDirectDriveFallback(mediaRef: MediaRef): MediaPlaybackResolution {
+async function resolveProtectedProxyFallback(mediaRef: MediaRef): Promise<MediaPlaybackResolution> {
   const rawId = mediaRef.id.trim();
   const driveFileId = extractDriveFileId(rawId);
 
-  if (driveFileId) {
-    const [primaryUrl, ...fallbackUrls] = buildDriveCandidateUrls(driveFileId);
+  // Route through our opaque HMAC-signed same-origin proxy (works on Node, Vercel, Cloud Run, and Cloudflare Workers)
+  const proxied = await requestProtectedProxyUrl(driveFileId ?? rawId, mediaRef.type);
+  if (proxied?.url) {
     return {
-      url: primaryUrl,
-      fallbackUrls,
-      embedFallbackUrl: buildDrivePreviewEmbedUrl(driveFileId),
-      mimeType: mediaRef.type === 'video' ? 'video/mp4' : 'audio/mpeg',
+      url: proxied.url,
+      expiresAt: proxied.expiresAt,
+      mimeType:
+        proxied.mimeType ||
+        (driveFileId
+          ? mediaRef.type === 'video'
+            ? 'video/mp4'
+            : 'audio/mpeg'
+          : inferMimeTypeFromUrl(rawId, mediaRef.type)),
       provider: 'drive',
       isSimulatedMedia: false,
-      isProductionProtected: false,
-      label: 'Google Drive (Direct shared playback)',
+      isProductionProtected: true,
+      label: 'Protected Media Stream',
     };
   }
 
-  const safeUrl = normalizeDirectMediaUrl(rawId) ?? sanitizeSafeUrl(rawId);
-  if (safeUrl) {
-    return {
-      url: safeUrl,
-      mimeType: inferMimeTypeFromUrl(safeUrl, mediaRef.type),
-      provider: 'drive',
-      isSimulatedMedia: false,
-      isProductionProtected: false,
-      label: 'Direct HTTPS Media Stream',
-    };
+  // Only allow direct fallback for non-Drive public HTTPS URLs (never expose Drive iframe/download URLs)
+  if (!driveFileId) {
+    const safeUrl = normalizeDirectMediaUrl(rawId) ?? sanitizeSafeUrl(rawId);
+    if (safeUrl) {
+      return {
+        url: safeUrl,
+        mimeType: inferMimeTypeFromUrl(safeUrl, mediaRef.type),
+        provider: 'drive',
+        isSimulatedMedia: false,
+        isProductionProtected: false,
+        label: 'Direct HTTPS Media Stream',
+      };
+    }
   }
 
   throw new DriveMediaError(
-    'file_not_found',
-    400,
-    'This episode does not have a valid Google Drive file ID or direct HTTPS media URL.'
+    'server_not_configured',
+    503,
+    'Protected media streaming service is temporarily unavailable. Please try again in a moment.'
   );
 }
 
@@ -270,8 +278,7 @@ export class DriveMediaProvider implements MediaProvider {
         }),
       });
     } catch {
-      // Network/unreachable backend -> use direct shared Google Drive playback fallback
-      return resolveDirectDriveFallback(mediaRef);
+      return resolveProtectedProxyFallback(mediaRef);
     }
 
     const payload = await parseJsonSafe<{
@@ -284,19 +291,18 @@ export class DriveMediaProvider implements MediaProvider {
     }>(response);
 
     if (!response.ok) {
-      // Static hosting (404/405/non-JSON) or server not configured (503) -> fall back to direct shared playback
       if (
         isStaticHostApiUnavailable(response.status, Boolean(payload)) ||
         response.status === 503 ||
         payload?.code === 'server_not_configured'
       ) {
-        return resolveDirectDriveFallback(mediaRef);
+        return resolveProtectedProxyFallback(mediaRef);
       }
       throw mapDriveApiError(response.status, payload);
     }
 
     if (!payload?.url || !payload.url.startsWith('/api/media/stream')) {
-      return resolveDirectDriveFallback(mediaRef);
+      return resolveProtectedProxyFallback(mediaRef);
     }
 
     return {
@@ -306,8 +312,8 @@ export class DriveMediaProvider implements MediaProvider {
         payload.mimeType || (mediaRef.type === 'video' ? 'video/mp4' : 'audio/mpeg'),
       provider: 'drive',
       isSimulatedMedia: false,
-      isProductionProtected: false,
-      label: 'Google Drive (Signed stream proxy)',
+      isProductionProtected: true,
+      label: 'Protected Media Stream',
     };
   }
 

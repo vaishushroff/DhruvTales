@@ -1,11 +1,7 @@
 import type { Episode, MediaRef, UserProfile } from '../../types';
 import { sanitizeSafeUrl } from '../../utils/validation';
-import {
-  buildDrivePreviewEmbedUrl,
-  extractDriveFileId,
-  normalizeDirectMediaUrl,
-} from './driveFallback';
-import { buildDriveCandidateUrls, inferMimeTypeFromUrl } from './mediaFormats';
+import { extractDriveFileId, normalizeDirectMediaUrl } from './driveFallback';
+import { inferMimeTypeFromUrl, requestProtectedProxyUrl } from './mediaFormats';
 import type {
   MediaPlaybackResolution,
   MediaProvider,
@@ -17,18 +13,17 @@ import type {
  * backwards compatibility with existing Firestore documents).
  *
  * Supports all web audio formats (MP3, M4A, AAC, WAV, OGG, OPUS, FLAC, WebM, etc.)
- * and all web video formats (MP4, WebM, MOV, MKV, M4V, OGV, 3GP, AVI) via direct
- * HTTPS URLs (Cloudflare R2, Dropbox, GitHub raw, Firebase Storage, CDNs) as well
- * as automatic recovery for Google Drive links stored under `provider: 'demo'`.
+ * and all web video formats (MP4, WebM, MOV, MKV, M4V, OGV, 3GP, AVI) via our
+ * protected same-origin Range streaming proxy so raw file URLs are never exposed.
  */
 
 const localFileRegistry = new Map<string, { url: string; mimeType: string; name: string }>();
 
 export class DemoMediaProvider implements MediaProvider {
   readonly providerType = 'demo' as const;
-  readonly displayName = 'Direct Media Provider (All Audio & Video Formats)';
+  readonly displayName = 'Protected Media Provider (All Audio & Video Formats)';
   readonly isImplemented = true;
-  readonly isProductionProtected = false;
+  readonly isProductionProtected = true;
 
   async checkAccess(
     mediaRef: MediaRef,
@@ -69,24 +64,40 @@ export class DemoMediaProvider implements MediaProvider {
     // 2. Auto-detect Google Drive links/IDs even if saved under legacy 'demo' provider
     const driveFileId = extractDriveFileId(rawId);
     if (driveFileId) {
-      const [primaryUrl, ...fallbackUrls] = buildDriveCandidateUrls(driveFileId);
-      return {
-        url: primaryUrl,
-        fallbackUrls,
-        embedFallbackUrl: buildDrivePreviewEmbedUrl(driveFileId),
-        mimeType: mediaRef.type === 'video' ? 'video/mp4' : 'audio/mpeg',
-        provider: 'drive',
-        isSimulatedMedia: false,
-        isProductionProtected: false,
-        label: 'Google Drive (Direct shared playback)',
-      };
+      const proxied = await requestProtectedProxyUrl(driveFileId, mediaRef.type);
+      if (proxied?.url) {
+        return {
+          url: proxied.url,
+          expiresAt: proxied.expiresAt,
+          mimeType: proxied.mimeType || (mediaRef.type === 'video' ? 'video/mp4' : 'audio/mpeg'),
+          provider: 'drive',
+          isSimulatedMedia: false,
+          isProductionProtected: true,
+          label: 'Protected Media Stream',
+        };
+      }
+      throw new Error(
+        'Protected media streaming service is temporarily unavailable. Please try again in a moment.'
+      );
     }
 
-    // 3. Direct validated HTTPS hosted media URL (all audio & video formats)
+    // 3. External hosted HTTPS media URL -> prefer protected proxy so raw link stays hidden
     if (/^https:\/\//i.test(rawId)) {
       const safeExternalUrl = normalizeDirectMediaUrl(rawId) ?? sanitizeSafeUrl(rawId);
       if (!safeExternalUrl) {
         throw new Error('Blocked unsafe external media URL.');
+      }
+      const proxied = await requestProtectedProxyUrl(safeExternalUrl, mediaRef.type);
+      if (proxied?.url) {
+        return {
+          url: proxied.url,
+          expiresAt: proxied.expiresAt,
+          mimeType: proxied.mimeType || inferMimeTypeFromUrl(safeExternalUrl, mediaRef.type),
+          provider: 'demo',
+          isSimulatedMedia: false,
+          isProductionProtected: true,
+          label: 'Protected Media Stream',
+        };
       }
       return {
         url: safeExternalUrl,

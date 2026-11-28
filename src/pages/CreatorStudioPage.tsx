@@ -12,6 +12,7 @@ import {
   Edit3,
   ExternalLink,
   Film,
+  FolderOpen,
   GitBranch,
   Layers,
   Loader2,
@@ -20,12 +21,14 @@ import {
   Play,
   Plus,
   RefreshCw,
+  Search,
   ShieldCheck,
   Trash2,
   Users,
   X,
 } from 'lucide-react';
 import { PortraitVideoFrame } from '../components/PortraitVideoFrame';
+import { DriveFolderPicker } from '../components/studio/DriveFolderPicker';
 import { useAudioPlayer } from '../hooks/useAudioPlayer';
 import { useAppData } from '../hooks/useAuthAndActivity';
 import { useLanguage } from '../hooks/useLanguage';
@@ -43,11 +46,14 @@ import {
   formatRealDuration,
   getMediaProvider,
   isPlaceholderMediaRef,
-  probeMediaMetadata,
-  resolveCreatorMediaInput,
   SUPPORTED_AUDIO_FORMAT_LABEL,
   SUPPORTED_VIDEO_FORMAT_LABEL,
 } from '../services/media';
+import {
+  formatBytesReadable,
+  resolveDrivePathWithServiceAccount,
+  type DriveBrowseFileItem,
+} from '../services/media/drivePathClient';
 import {
   detectVideoAspectFormat,
   formatVideoDimensions,
@@ -176,21 +182,22 @@ export const CreatorStudioPage: React.FC = () => {
   const [studioPreviewUrl, setStudioPreviewUrl] = useState<string | null>(null);
   const [studioPreviewLoading, setStudioPreviewLoading] = useState(false);
 
-  // Automatic real media & duration probing state
+  // Service Account Google Drive Path state & automatic real duration/dimension detection
   type SlotProbeState = {
-    status: 'idle' | 'probing' | 'verified' | 'embed_only' | 'unverified';
+    status: 'idle' | 'probing' | 'verified' | 'unverified';
     durationSec?: number | null;
     width?: number;
     height?: number;
     resolvedUrl?: string;
+    fileName?: string;
+    sizeBytes?: number;
     message?: string;
   };
-  const [audioLinkInput, setAudioLinkInput] = useState('');
-  const [audioLinkFeedback, setAudioLinkFeedback] = useState<{ ok: boolean; text: string } | null>(null);
+  const [audioPathInput, setAudioPathInput] = useState('');
   const [audioProbe, setAudioProbe] = useState<SlotProbeState>({ status: 'idle' });
-  const [videoLinkInput, setVideoLinkInput] = useState('');
-  const [videoLinkFeedback, setVideoLinkFeedback] = useState<{ ok: boolean; text: string } | null>(null);
+  const [videoPathInput, setVideoPathInput] = useState('');
   const [videoProbe, setVideoProbe] = useState<SlotProbeState>({ status: 'idle' });
+  const [driveBrowserSlot, setDriveBrowserSlot] = useState<'audio' | 'video' | null>(null);
   const [durationDetected, setDurationDetected] = useState(false);
   const audioProbeSeqRef = useRef(0);
   const videoProbeSeqRef = useRef(0);
@@ -198,12 +205,18 @@ export const CreatorStudioPage: React.FC = () => {
   // Delete story confirmation
   const [deleteStoryTarget, setDeleteStoryTarget] = useState<Story | null>(null);
 
-  // Resolve inline Studio preview URL strictly through MediaProvider (supports both Demo and Drive)
+  // Resolve inline Studio preview URL (prefers encrypted proxy URL returned by Drive path resolver)
   useEffect(() => {
     let cancelled = false;
     const videoRef = episodeForm?.videoMediaRef;
     if (!episodeModalOpen || !videoRef) {
       setStudioPreviewUrl(null);
+      setStudioPreviewLoading(false);
+      return;
+    }
+
+    if (videoProbe.resolvedUrl) {
+      setStudioPreviewUrl(videoProbe.resolvedUrl);
       setStudioPreviewLoading(false);
       return;
     }
@@ -235,7 +248,15 @@ export const CreatorStudioPage: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [episodeModalOpen, episodeForm?.videoMediaRef, episodeForm?.id, selectedStoryId, catalogEpisodes, profile]);
+  }, [
+    episodeModalOpen,
+    episodeForm?.videoMediaRef,
+    episodeForm?.id,
+    videoProbe.resolvedUrl,
+    selectedStoryId,
+    catalogEpisodes,
+    profile,
+  ]);
 
   const loadStudioData = useCallback(async () => {
     if (!profile) return;
@@ -464,54 +485,114 @@ export const CreatorStudioPage: React.FC = () => {
     }
   };
 
-  // --- Automatic Real Media & Duration Detection ---
-  const triggerMediaProbe = useCallback((slot: 'audio' | 'video', mediaRef: MediaRef) => {
-    const seqRef = slot === 'audio' ? audioProbeSeqRef : videoProbeSeqRef;
-    const setProbe = slot === 'audio' ? setAudioProbe : setVideoProbe;
-    const seq = ++seqRef.current;
+  // --- Service Account Drive Path Resolution & Real Duration Detection ---
+  const resolveDriveSlot = useCallback(
+    async (
+      slot: 'audio' | 'video',
+      input: { path?: string; fileId?: string }
+    ): Promise<{ ok: true; mediaRef: MediaRef; durationSec?: number } | { ok: false; error: string }> => {
+      const seqRef = slot === 'audio' ? audioProbeSeqRef : videoProbeSeqRef;
+      const setProbe = slot === 'audio' ? setAudioProbe : setVideoProbe;
+      const seq = ++seqRef.current;
 
-    setProbe({
-      status: 'probing',
-      message: `Detecting real ${slot} file & duration…`,
-    });
+      const rawPath = input.path?.trim() ?? '';
+      const rawFileId = input.fileId?.trim() ?? '';
 
-    void probeMediaMetadata(mediaRef).then((res) => {
-      if (seqRef.current !== seq) return;
+      if (rawPath && /^https?:\/\//i.test(rawPath)) {
+        const msg =
+          'Do not paste a link—type the file path inside your Google Drive folder (for example: Trinetra/EP_1.wav) or click Browse Drive.';
+        setProbe({ status: 'unverified', message: msg });
+        return { ok: false, error: msg };
+      }
 
-      if (res.status === 'verified') {
+      setProbe({
+        status: 'probing',
+        message: rawPath
+          ? `Locating "${rawPath}" via Service Account & detecting real duration…`
+          : `Reading Google Drive ${slot} metadata via Service Account…`,
+      });
+
+      try {
+        const resolved = await resolveDrivePathWithServiceAccount({
+          ...(rawPath ? { path: rawPath } : { fileId: rawFileId }),
+          slot,
+        });
+        if (seqRef.current !== seq) {
+          return { ok: false, error: 'Superseded by newer lookup.' };
+        }
+
+        const mediaRef: MediaRef = {
+          provider: 'drive',
+          id: resolved.fileId,
+          type: slot,
+        };
+
+        setEpisodeForm((prev) => {
+          if (!prev) return prev;
+          const nextDur =
+            resolved.durationSec && resolved.durationSec > 0
+              ? resolved.durationSec
+              : prev.durationSec;
+          return slot === 'video'
+            ? { ...prev, videoMediaRef: mediaRef, durationSec: nextDur }
+            : { ...prev, audioRef: mediaRef, durationSec: nextDur };
+        });
+
+        if (resolved.durationSec && resolved.durationSec > 0) {
+          setDurationDetected(true);
+        }
+
+        if (slot === 'video' && resolved.width && resolved.height) {
+          setVideoDetectedDimensions({ width: resolved.width, height: resolved.height });
+          setStudioPreviewAspect(detectVideoAspectFormat(resolved.width, resolved.height));
+          setStudioPreviewNaturalAspect(resolved.width / resolved.height);
+        }
+
+        const detailParts = [
+          resolved.name,
+          slot === 'video' && resolved.width && resolved.height
+            ? `${formatVideoDimensions(resolved.width, resolved.height)} (original)`
+            : '',
+          resolved.durationSec ? `Real duration: ${formatRealDuration(resolved.durationSec)}` : '',
+          resolved.sizeBytes ? formatBytesReadable(resolved.sizeBytes) : '',
+        ].filter(Boolean);
+
         setProbe({
           status: 'verified',
-          durationSec: res.durationSec,
-          width: res.width,
-          height: res.height,
-          resolvedUrl: res.resolvedUrl,
-          message:
-            slot === 'video' && res.width && res.height
-              ? `Verified video · ${formatVideoDimensions(res.width, res.height)} (original) · Real duration: ${formatRealDuration(res.durationSec)}`
-              : `Verified ${slot} · Real duration: ${formatRealDuration(res.durationSec)}`,
+          durationSec: resolved.durationSec ?? null,
+          width: resolved.width,
+          height: resolved.height,
+          resolvedUrl: resolved.previewProxyUrl,
+          fileName: resolved.name,
+          sizeBytes: resolved.sizeBytes,
+          message: `Found in Google Drive · ${detailParts.join(' · ')}`,
         });
-        setDurationDetected(true);
-        setEpisodeForm((prev) => (prev ? { ...prev, durationSec: res.durationSec } : prev));
-        if (slot === 'video' && res.width && res.height) {
-          setVideoDetectedDimensions({ width: res.width, height: res.height });
-          setStudioPreviewAspect(detectVideoAspectFormat(res.width, res.height));
-          setStudioPreviewNaturalAspect(res.width / res.height);
+
+        return { ok: true, mediaRef, durationSec: resolved.durationSec };
+      } catch (err) {
+        if (seqRef.current !== seq) {
+          return { ok: false, error: 'Superseded by newer lookup.' };
         }
-      } else if (res.status === 'embed_only') {
-        setProbe({
-          status: 'embed_only',
-          durationSec: null,
-          message:
-            'Google Drive file attached · Plays in universal Drive player across all formats (duration syncs automatically on playback).',
-        });
-      } else {
-        setProbe({
-          status: 'unverified',
-          message: res.reason,
-        });
+        const msg =
+          err instanceof Error
+            ? err.message
+            : 'Could not find this path in Google Drive using the Service Account.';
+        setProbe({ status: 'unverified', message: msg });
+        return { ok: false, error: msg };
       }
-    });
-  }, []);
+    },
+    []
+  );
+
+  const handleDriveFilePicked = (slot: 'audio' | 'video', file: DriveBrowseFileItem) => {
+    setDriveBrowserSlot(null);
+    if (slot === 'audio') {
+      setAudioPathInput(file.path);
+    } else {
+      setVideoPathInput(file.path);
+    }
+    void resolveDriveSlot(slot, { path: file.path });
+  };
 
   // --- Episode CRUD & Reorder Handlers ---
   const openCreateEpisode = () => {
@@ -519,6 +600,7 @@ export const CreatorStudioPage: React.FC = () => {
     setBanner(null);
     audioProbeSeqRef.current += 1;
     videoProbeSeqRef.current += 1;
+    setDriveBrowserSlot(null);
     setVideoDetectedDimensions(null);
     setStudioPreviewNaturalAspect(null);
     setDurationDetected(false);
@@ -550,10 +632,8 @@ export const CreatorStudioPage: React.FC = () => {
         { id: `opt-${Date.now()}-2`, labelEn: '', labelHi: '', nextEpisodeId: '' },
       ],
     });
-    setAudioLinkInput('');
-    setAudioLinkFeedback(null);
-    setVideoLinkInput('');
-    setVideoLinkFeedback(null);
+    setAudioPathInput('');
+    setVideoPathInput('');
     setEpisodeModalOpen(true);
   };
 
@@ -561,6 +641,7 @@ export const CreatorStudioPage: React.FC = () => {
     setBanner(null);
     audioProbeSeqRef.current += 1;
     videoProbeSeqRef.current += 1;
+    setDriveBrowserSlot(null);
     setVideoDetectedDimensions(null);
     setStudioPreviewNaturalAspect(null);
     setAudioProbe({ status: 'idle' });
@@ -593,25 +674,15 @@ export const CreatorStudioPage: React.FC = () => {
               { id: `opt-${Date.now()}-2`, labelEn: '', labelHi: '', nextEpisodeId: '' },
             ],
     });
-    setAudioLinkInput(
-      existingAudio.provider === 'drive' || /^https:\/\//i.test(existingAudio.id)
-        ? existingAudio.id
-        : ''
-    );
-    setAudioLinkFeedback(null);
-    setVideoLinkInput(
-      ep.videoMediaRef && (ep.videoMediaRef.provider === 'drive' || /^https:\/\//i.test(ep.videoMediaRef.id))
-        ? ep.videoMediaRef.id
-        : ''
-    );
-    setVideoLinkFeedback(null);
+    setAudioPathInput('');
+    setVideoPathInput('');
     setEpisodeModalOpen(true);
 
-    if (!isPlaceholderMediaRef(existingAudio)) {
-      triggerMediaProbe('audio', existingAudio);
+    if (existingAudio.provider === 'drive' && !isPlaceholderMediaRef(existingAudio)) {
+      void resolveDriveSlot('audio', { fileId: existingAudio.id });
     }
-    if (ep.videoMediaRef && !isPlaceholderMediaRef(ep.videoMediaRef)) {
-      triggerMediaProbe('video', ep.videoMediaRef);
+    if (ep.videoMediaRef && ep.videoMediaRef.provider === 'drive' && !isPlaceholderMediaRef(ep.videoMediaRef)) {
+      void resolveDriveSlot('video', { fileId: ep.videoMediaRef.id });
     }
   };
 
@@ -644,58 +715,62 @@ export const CreatorStudioPage: React.FC = () => {
       return;
     }
 
-    const hasRealAudio = !isPlaceholderMediaRef(episodeForm.audioRef);
+    let resolvedAudioRef = episodeForm.audioRef;
+    let resolvedVideoRef = episodeForm.videoMediaRef;
+    let resolvedDuration =
+      audioProbe.durationSec ??
+      videoProbe.durationSec ??
+      (Number.isFinite(episodeForm.durationSec) && episodeForm.durationSec > 0
+        ? episodeForm.durationSec
+        : 1);
+
+    // If creator typed a Drive path without clicking Find first, resolve it now automatically via Service Account!
+    if (audioPathInput.trim() && audioProbe.status !== 'verified') {
+      setBusy(true);
+      const res = await resolveDriveSlot('audio', { path: audioPathInput.trim() });
+      setBusy(false);
+      if (!res.ok) {
+        setBanner({ type: 'error', text: res.error });
+        return;
+      }
+      resolvedAudioRef = res.mediaRef;
+      if (res.durationSec && res.durationSec > 0) {
+        resolvedDuration = res.durationSec;
+      }
+    }
+
+    if (videoPathInput.trim() && videoProbe.status !== 'verified') {
+      setBusy(true);
+      const res = await resolveDriveSlot('video', { path: videoPathInput.trim() });
+      setBusy(false);
+      if (!res.ok) {
+        setBanner({ type: 'error', text: res.error });
+        return;
+      }
+      resolvedVideoRef = res.mediaRef;
+      if (res.durationSec && res.durationSec > 0) {
+        resolvedDuration = res.durationSec;
+      }
+    }
+
+    const hasRealAudio = !isPlaceholderMediaRef(resolvedAudioRef);
     const hasRealVideo =
-      Boolean(episodeForm.videoMediaRef) && !isPlaceholderMediaRef(episodeForm.videoMediaRef);
+      Boolean(resolvedVideoRef) && !isPlaceholderMediaRef(resolvedVideoRef);
 
     if (!hasRealAudio && !hasRealVideo) {
       setBanner({
         type: 'error',
-        text: 'Paste a real Audio or Video link (direct HTTPS file URL or shared Google Drive file) before saving.',
-      });
-      return;
-    }
-
-    if (audioLinkInput.trim() && audioLinkFeedback && !audioLinkFeedback.ok) {
-      setBanner({ type: 'error', text: audioLinkFeedback.text });
-      return;
-    }
-    if (videoLinkInput.trim() && videoLinkFeedback && !videoLinkFeedback.ok) {
-      setBanner({ type: 'error', text: videoLinkFeedback.text });
-      return;
-    }
-
-    if (audioLinkInput.trim() && audioProbe.status === 'unverified') {
-      setBanner({
-        type: 'error',
-        text:
-          audioProbe.message ??
-          'Audio link could not be verified as a real audio file. Paste a public audio file link or shared Google Drive file.',
-      });
-      return;
-    }
-    if (videoLinkInput.trim() && videoProbe.status === 'unverified') {
-      setBanner({
-        type: 'error',
-        text:
-          videoProbe.message ??
-          'Video link could not be verified as a real video file. Paste a public video file link or shared Google Drive file.',
+        text: 'Enter a Google Drive file path (for example: Trinetra/EP_1.wav) or pick a file using Browse Drive before saving.',
       });
       return;
     }
 
     // If only a video file is attached, mirror it to audioRef so video-only episodes save & play cleanly
     const effectiveAudioRef: MediaRef = hasRealAudio
-      ? episodeForm.audioRef
-      : { ...(episodeForm.videoMediaRef as MediaRef), type: 'audio' };
+      ? resolvedAudioRef
+      : { ...(resolvedVideoRef as MediaRef), type: 'audio' };
 
-    const detectedDur =
-      audioProbe.durationSec ??
-      videoProbe.durationSec ??
-      (Number.isFinite(episodeForm.durationSec) && episodeForm.durationSec > 0
-        ? episodeForm.durationSec
-        : 1);
-    const safeDurationSec = Math.max(1, Math.min(86400, Math.round(detectedDur)));
+    const safeDurationSec = Math.max(1, Math.min(86400, Math.round(resolvedDuration)));
 
     let choicePointPayload: EpisodeChoicePoint | null = null;
     if (episodeForm.hasChoicePoint) {
@@ -724,7 +799,7 @@ export const CreatorStudioPage: React.FC = () => {
     try {
       const otherEpisodes = selectedStoryEpisodes.filter((ep) => ep.id !== episodeForm.id);
       const totalAfter = otherEpisodes.length + 1;
-      const anyVideo = Boolean(episodeForm.videoMediaRef) || otherEpisodes.some((ep) => Boolean(ep.videoMediaRef));
+      const anyVideo = Boolean(resolvedVideoRef) || otherEpisodes.some((ep) => Boolean(ep.videoMediaRef));
       const anyChoice = Boolean(choicePointPayload) || otherEpisodes.some((ep) => Boolean(ep.choicePoint));
 
       await saveCreatorEpisodeToFirestore(
@@ -740,7 +815,7 @@ export const CreatorStudioPage: React.FC = () => {
           priceCoins: episodeForm.priceCoins,
           isEnding: episodeForm.isEnding,
           audioRef: effectiveAudioRef,
-          videoMediaRef: episodeForm.videoMediaRef,
+          videoMediaRef: resolvedVideoRef,
           choicePoint: choicePointPayload,
         },
         selectedStory.creatorOwnerUid || profile.uid,
@@ -892,7 +967,7 @@ export const CreatorStudioPage: React.FC = () => {
             <Layers className="w-4 h-4 text-[#E5A93C]" aria-hidden="true" />
           </div>
           <p className="font-display text-3xl font-semibold text-[#F5F3EE]">{stats.totalEpisodes}</p>
-          <p className="text-[11px] text-[#8A857B]">MediaProvider managed</p>
+          <p className="text-[11px] text-[#8A857B]">Google Drive (Service Account)</p>
         </div>
 
         <div className="rounded-2xl bg-[#141418] border border-white/[0.08] p-5 space-y-2">
@@ -1669,65 +1744,77 @@ export const CreatorStudioPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Direct Audio & Video Link Slots (All Web Formats · Original Size & Real Duration) */}
+            {/* Google Drive Path Slots (Service Account Only — No Link Pasting) */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 rounded-xl bg-[#0B0B0E] border border-white/[0.08] p-4">
+              {/* AUDIO SLOT */}
               <div className="space-y-2.5">
-                <p className="text-xs font-medium text-[#F5F3EE]">Audio Media Link</p>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-medium text-[#F5F3EE]">Audio File Path (Google Drive)</p>
+                  <button
+                    type="button"
+                    data-testid="studio-browse-audio-drive-btn"
+                    onClick={() =>
+                      setDriveBrowserSlot((cur) => (cur === 'audio' ? null : 'audio'))
+                    }
+                    className="min-h-[30px] px-2.5 rounded-lg bg-[#141418] border border-[#E5A93C]/35 text-[11px] font-medium text-[#F3C669] hover:bg-[#E5A93C]/15 inline-flex items-center gap-1.5 transition-colors"
+                  >
+                    <FolderOpen className="w-3.5 h-3.5" aria-hidden="true" />
+                    Browse Drive
+                  </button>
+                </div>
+
                 <div className="space-y-1.5">
-                  <label htmlFor="studio-audio-link-input" className="text-[11px] text-[#A39E93] block">
-                    Paste direct HTTPS audio link, Dropbox link, or shared Google Drive file link
+                  <label htmlFor="studio-audio-path-input" className="text-[11px] text-[#A39E93] block">
+                    Enter path inside your private Drive folder (no URL needed)
                   </label>
-                  <input
-                    id="studio-audio-link-input"
-                    type="text"
-                    value={audioLinkInput}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setAudioLinkInput(val);
-                      if (!val.trim()) {
-                        audioProbeSeqRef.current += 1;
-                        setAudioLinkFeedback(null);
-                        setAudioProbe({ status: 'idle' });
-                        setEpisodeForm((prev) =>
-                          prev
-                            ? {
-                                ...prev,
-                                audioRef: {
-                                  provider: 'demo',
-                                  id: `demo-audio-${selectedStory?.id ?? 'story'}-ep${prev.episodeNumber}`,
-                                  type: 'audio',
-                                },
-                              }
-                            : prev
-                        );
-                        return;
-                      }
-                      const parsed = resolveCreatorMediaInput(val, 'audio');
-                      if (parsed.ok) {
-                        setEpisodeForm((prev) => (prev ? { ...prev, audioRef: parsed.mediaRef } : prev));
-                        setAudioLinkFeedback({ ok: true, text: `Attached: ${parsed.label}` });
-                        triggerMediaProbe('audio', parsed.mediaRef);
-                      } else {
-                        audioProbeSeqRef.current += 1;
-                        setAudioProbe({ status: 'idle' });
-                        setAudioLinkFeedback({ ok: false, text: parsed.reason });
-                      }
-                    }}
-                    placeholder="https://.../ep01.mp3, .m4a, .wav, .ogg or Google Drive link"
-                    className="w-full h-10 px-3 rounded-lg bg-[#141418] border border-white/15 text-xs text-[#F5F3EE] placeholder:text-[#66625B] focus:outline-none focus:border-[#E5A93C]"
-                  />
-                  {audioLinkFeedback && !audioLinkFeedback.ok && (
-                    <p className="text-[11px] leading-snug text-rose-300">
-                      {audioLinkFeedback.text}
-                    </p>
-                  )}
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      id="studio-audio-path-input"
+                      data-testid="studio-audio-path-input"
+                      type="text"
+                      value={audioPathInput}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setAudioPathInput(val);
+                        if (!val.trim()) {
+                          audioProbeSeqRef.current += 1;
+                          setAudioProbe({ status: 'idle' });
+                        } else if (audioProbe.status !== 'idle') {
+                          setAudioProbe({ status: 'idle' });
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && audioPathInput.trim()) {
+                          e.preventDefault();
+                          void resolveDriveSlot('audio', { path: audioPathInput.trim() });
+                        }
+                      }}
+                      placeholder="e.g. Trinetra/EP_1.wav"
+                      className="flex-1 min-w-0 h-10 px-3 rounded-lg bg-[#141418] border border-white/15 text-xs text-[#F5F3EE] placeholder:text-[#66625B] focus:outline-none focus:border-[#E5A93C]"
+                    />
+                    <button
+                      type="button"
+                      data-testid="studio-find-audio-path-btn"
+                      disabled={!audioPathInput.trim() || audioProbe.status === 'probing'}
+                      onClick={() => void resolveDriveSlot('audio', { path: audioPathInput.trim() })}
+                      className="h-10 px-3 rounded-lg bg-[#E5A93C] text-[#0B0B0E] hover:bg-[#F3C669] disabled:opacity-45 text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors"
+                    >
+                      {audioProbe.status === 'probing' ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                      ) : (
+                        <Search className="w-3.5 h-3.5" aria-hidden="true" />
+                      )}
+                      Find
+                    </button>
+                  </div>
+
                   {audioProbe.status === 'probing' && (
                     <p className="text-[11px] leading-snug text-[#F3C669] inline-flex items-center gap-1.5">
                       <Loader2 className="w-3 h-3 animate-spin shrink-0" aria-hidden="true" />
                       {audioProbe.message}
                     </p>
                   )}
-                  {(audioProbe.status === 'verified' || audioProbe.status === 'embed_only') && (
+                  {audioProbe.status === 'verified' && (
                     <p className="text-[11px] leading-snug text-emerald-300 inline-flex items-start gap-1.5">
                       <CheckCircle2 className="w-3.5 h-3.5 shrink-0 mt-0.5" aria-hidden="true" />
                       <span>{audioProbe.message}</span>
@@ -1740,68 +1827,89 @@ export const CreatorStudioPage: React.FC = () => {
                     </p>
                   )}
                 </div>
+
                 <p className="text-[11px] text-[#8A857B] leading-relaxed">
-                  Supported audio formats: {SUPPORTED_AUDIO_FORMAT_LABEL}
+                  All audio formats supported: {SUPPORTED_AUDIO_FORMAT_LABEL}
                 </p>
+
                 {!isPlaceholderMediaRef(episodeForm.audioRef) && (
-                  <p className="text-[11px] text-[#8A857B] truncate">
-                    {t('studio.attachedRefLabel')}: {episodeForm.audioRef.provider}:{episodeForm.audioRef.id}
+                  <p className="text-[11px] text-[#A39E93] truncate">
+                    Attached: {audioProbe.fileName || 'Google Drive audio file'}
                   </p>
                 )}
               </div>
 
+              {/* VIDEO SLOT */}
               <div className="space-y-2.5">
-                <p className="text-xs font-medium text-[#F5F3EE]">
-                  Video Media Link (Optional — enables Audio ⇄ Video)
-                </p>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-medium text-[#F5F3EE]">
+                    Video File Path (Optional — Audio ⇄ Video)
+                  </p>
+                  <button
+                    type="button"
+                    data-testid="studio-browse-video-drive-btn"
+                    onClick={() =>
+                      setDriveBrowserSlot((cur) => (cur === 'video' ? null : 'video'))
+                    }
+                    className="min-h-[30px] px-2.5 rounded-lg bg-[#141418] border border-[#E5A93C]/35 text-[11px] font-medium text-[#F3C669] hover:bg-[#E5A93C]/15 inline-flex items-center gap-1.5 transition-colors"
+                  >
+                    <FolderOpen className="w-3.5 h-3.5" aria-hidden="true" />
+                    Browse Drive
+                  </button>
+                </div>
+
                 <div className="space-y-1.5">
-                  <label htmlFor="studio-video-link-input" className="text-[11px] text-[#A39E93] block">
-                    Paste direct HTTPS video link, Dropbox link, or shared Google Drive file link
+                  <label htmlFor="studio-video-path-input" className="text-[11px] text-[#A39E93] block">
+                    Enter path inside your private Drive folder (no URL needed)
                   </label>
-                  <input
-                    id="studio-video-link-input"
-                    type="text"
-                    value={videoLinkInput}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setVideoLinkInput(val);
-                      if (!val.trim()) {
-                        videoProbeSeqRef.current += 1;
-                        setVideoLinkFeedback(null);
-                        setVideoProbe({ status: 'idle' });
-                        setVideoDetectedDimensions(null);
-                        setStudioPreviewNaturalAspect(null);
-                        setEpisodeForm((prev) => (prev ? { ...prev, videoMediaRef: null } : prev));
-                        return;
-                      }
-                      const parsed = resolveCreatorMediaInput(val, 'video');
-                      if (parsed.ok) {
-                        setEpisodeForm((prev) =>
-                          prev ? { ...prev, videoMediaRef: parsed.mediaRef } : prev
-                        );
-                        setVideoLinkFeedback({ ok: true, text: `Attached: ${parsed.label}` });
-                        triggerMediaProbe('video', parsed.mediaRef);
-                      } else {
-                        videoProbeSeqRef.current += 1;
-                        setVideoProbe({ status: 'idle' });
-                        setVideoLinkFeedback({ ok: false, text: parsed.reason });
-                      }
-                    }}
-                    placeholder="https://.../ep01.mp4, .webm, .mov, .mkv or Google Drive link"
-                    className="w-full h-10 px-3 rounded-lg bg-[#141418] border border-white/15 text-xs text-[#F5F3EE] placeholder:text-[#66625B] focus:outline-none focus:border-[#E5A93C]"
-                  />
-                  {videoLinkFeedback && !videoLinkFeedback.ok && (
-                    <p className="text-[11px] leading-snug text-rose-300">
-                      {videoLinkFeedback.text}
-                    </p>
-                  )}
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      id="studio-video-path-input"
+                      data-testid="studio-video-path-input"
+                      type="text"
+                      value={videoPathInput}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setVideoPathInput(val);
+                        if (!val.trim()) {
+                          videoProbeSeqRef.current += 1;
+                          setVideoProbe({ status: 'idle' });
+                        } else if (videoProbe.status !== 'idle') {
+                          setVideoProbe({ status: 'idle' });
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && videoPathInput.trim()) {
+                          e.preventDefault();
+                          void resolveDriveSlot('video', { path: videoPathInput.trim() });
+                        }
+                      }}
+                      placeholder="e.g. Trinetra/EP_1.mp4"
+                      className="flex-1 min-w-0 h-10 px-3 rounded-lg bg-[#141418] border border-white/15 text-xs text-[#F5F3EE] placeholder:text-[#66625B] focus:outline-none focus:border-[#E5A93C]"
+                    />
+                    <button
+                      type="button"
+                      data-testid="studio-find-video-path-btn"
+                      disabled={!videoPathInput.trim() || videoProbe.status === 'probing'}
+                      onClick={() => void resolveDriveSlot('video', { path: videoPathInput.trim() })}
+                      className="h-10 px-3 rounded-lg bg-[#E5A93C] text-[#0B0B0E] hover:bg-[#F3C669] disabled:opacity-45 text-xs font-semibold inline-flex items-center gap-1.5 shrink-0 transition-colors"
+                    >
+                      {videoProbe.status === 'probing' ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                      ) : (
+                        <Search className="w-3.5 h-3.5" aria-hidden="true" />
+                      )}
+                      Find
+                    </button>
+                  </div>
+
                   {videoProbe.status === 'probing' && (
                     <p className="text-[11px] leading-snug text-[#F3C669] inline-flex items-center gap-1.5">
                       <Loader2 className="w-3 h-3 animate-spin shrink-0" aria-hidden="true" />
                       {videoProbe.message}
                     </p>
                   )}
-                  {(videoProbe.status === 'verified' || videoProbe.status === 'embed_only') && (
+                  {videoProbe.status === 'verified' && (
                     <p className="text-[11px] leading-snug text-emerald-300 inline-flex items-start gap-1.5">
                       <CheckCircle2 className="w-3.5 h-3.5 shrink-0 mt-0.5" aria-hidden="true" />
                       <span>{videoProbe.message}</span>
@@ -1814,19 +1922,21 @@ export const CreatorStudioPage: React.FC = () => {
                     </p>
                   )}
                 </div>
+
                 <p
                   data-testid="studio-video-instruction"
                   className="text-[11px] text-[#8A857B] leading-relaxed"
                 >
-                  Supported video formats: {SUPPORTED_VIDEO_FORMAT_LABEL}. Plays in your exact original size, aspect ratio, and full duration with no cropping or trimming.
+                  All video formats supported: {SUPPORTED_VIDEO_FORMAT_LABEL}. Plays in original size and full duration.
                 </p>
+
                 <div className="flex items-center justify-between gap-2">
                   <p
                     data-testid="studio-attached-video-ref"
-                    className="text-[11px] text-[#8A857B] truncate"
+                    className="text-[11px] text-[#A39E93] truncate"
                   >
                     {episodeForm.videoMediaRef
-                      ? `${episodeForm.videoMediaRef.provider}:${episodeForm.videoMediaRef.id}`
+                      ? `Attached: ${videoProbe.fileName || 'Google Drive video file'}`
                       : 'None attached'}
                     {videoDetectedDimensions && (
                       <span className="ml-1.5 text-emerald-400 font-mono-tabular">
@@ -1840,8 +1950,7 @@ export const CreatorStudioPage: React.FC = () => {
                       onClick={() => {
                         videoProbeSeqRef.current += 1;
                         setEpisodeForm({ ...episodeForm, videoMediaRef: null });
-                        setVideoLinkInput('');
-                        setVideoLinkFeedback(null);
+                        setVideoPathInput('');
                         setVideoProbe({ status: 'idle' });
                         setVideoDetectedDimensions(null);
                         setStudioPreviewNaturalAspect(null);
@@ -1853,6 +1962,17 @@ export const CreatorStudioPage: React.FC = () => {
                   )}
                 </div>
               </div>
+
+              {/* Inline Service Account Google Drive Folder Browser */}
+              {driveBrowserSlot && (
+                <div className="sm:col-span-2">
+                  <DriveFolderPicker
+                    slot={driveBrowserSlot}
+                    onSelectFile={(file) => handleDriveFilePicked(driveBrowserSlot, file)}
+                    onClose={() => setDriveBrowserSlot(null)}
+                  />
+                </div>
+              )}
 
               {/* Original-Format Studio Video Preview */}
               {episodeForm.videoMediaRef && (
@@ -1889,8 +2009,10 @@ export const CreatorStudioPage: React.FC = () => {
                         key={studioPreviewUrl}
                         src={studioPreviewUrl}
                         controls
+                        controlsList="nodownload"
                         playsInline
                         preload="metadata"
+                        onContextMenu={(e) => e.preventDefault()}
                         onLoadedMetadata={(e) => {
                           const v = e.currentTarget;
                           if (v.videoWidth > 0 && v.videoHeight > 0) {

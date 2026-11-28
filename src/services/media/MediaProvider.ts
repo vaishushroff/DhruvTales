@@ -12,10 +12,8 @@ export interface MediaPlaybackResolution {
   isProductionProtected?: boolean;
   /** Optional Unix epoch ms when a short-lived signed playback URL expires */
   expiresAt?: number;
-  /** Optional ordered direct stream fallback URLs tried before embed fallback */
+  /** Optional ordered direct stream fallback URLs */
   fallbackUrls?: string[];
-  /** Optional official embed player URL (e.g. Google Drive /preview) used automatically if HTML5 direct stream is blocked */
-  embedFallbackUrl?: string;
   label: string;
 }
 
