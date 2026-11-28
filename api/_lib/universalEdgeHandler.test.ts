@@ -164,3 +164,47 @@ test('edge proxy tokens encrypt Drive IDs and verify consistently using Service 
   const failed = await verifyEdgeProxyToken(tampered, env);
   assert.equal(failed.valid, false);
 });
+
+test('Service Account parser handles raw newlines in pasted JSON, outer quotes, base64, Cloudflare Secrets Store bindings, and clear diagnostics', async () => {
+  const { parseServiceAccountJsonString, resolveDriveServiceAccountCredsAsync } = await import(
+    './driveServiceAccount'
+  );
+
+  // 1. Raw unescaped newlines inside private_key (common when pasting JSON into web secret inputs)
+  const rawNewlineJson = `{
+    "type": "service_account",
+    "client_email": "drive-reader@dhruv-tales.iam.gserviceaccount.com",
+    "private_key": "-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSj
+-----END PRIVATE KEY-----
+"
+  }`;
+  const parsedRaw = parseServiceAccountJsonString(rawNewlineJson);
+  assert.ok(parsedRaw);
+  assert.equal(parsedRaw.clientEmail, 'drive-reader@dhruv-tales.iam.gserviceaccount.com');
+  assert.ok(parsedRaw.privateKey.includes('BEGIN PRIVATE KEY'));
+
+  // 2. Outer single quotes around JSON
+  const quoted = `'{"client_email":"sa@dhruv-tales.iam.gserviceaccount.com","private_key":"-----BEGIN PRIVATE KEY-----\\\\nABC\\\\n-----END PRIVATE KEY-----"}'`;
+  const parsedQuoted = parseServiceAccountJsonString(quoted);
+  assert.ok(parsedQuoted);
+  assert.equal(parsedQuoted.clientEmail, 'sa@dhruv-tales.iam.gserviceaccount.com');
+
+  // 3. Cloudflare Secrets Store binding ({ get(): Promise<string> })
+  const storeRes = await resolveDriveServiceAccountCredsAsync({
+    GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON: {
+      get: async () => rawNewlineJson,
+    },
+  });
+  assert.equal(storeRes.diagnostic.status, 'ok');
+  assert.equal(storeRes.creds?.clientEmail, 'drive-reader@dhruv-tales.iam.gserviceaccount.com');
+
+  // 4. Distinguishes missing_env vs invalid_json
+  const missingRes = await resolveDriveServiceAccountCredsAsync({});
+  assert.equal(missingRes.diagnostic.status, 'missing_env');
+
+  const invalidRes = await resolveDriveServiceAccountCredsAsync({
+    GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON: 'not-valid-json-at-all',
+  });
+  assert.equal(invalidRes.diagnostic.status, 'invalid_json');
+});

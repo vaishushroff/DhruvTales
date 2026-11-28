@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { applyCorsHeaders, parseAllowedOrigins } from './_lib/cors';
-import { isDriveServiceAccountConfigured } from './_lib/driveServiceAccount';
+import { resolveDriveServiceAccountCredsAsync } from './_lib/driveServiceAccount';
 
 /**
  * Non-sensitive health & configuration status endpoint.
@@ -23,7 +23,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
         process.env.FIREBASE_CLIENT_EMAIL?.trim() &&
         process.env.FIREBASE_PRIVATE_KEY?.trim())
   );
-  const driveConfigured = isDriveServiceAccountConfigured(process.env);
+  const { diagnostic } = await resolveDriveServiceAccountCredsAsync(process.env);
   const mediaSigningConfigured = Boolean(process.env.MEDIA_SIGNING_SECRET?.trim());
   const corsAllowedOriginsCount = parseAllowedOrigins(process.env.ALLOWED_ORIGINS).length;
 
@@ -38,7 +38,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     runtime: process.env.VERCEL ? 'vercel-serverless' : 'node-server',
     checks: {
       firebaseAdminConfigured,
-      driveConfigured,
+      driveConfigured: diagnostic.configured,
+      driveStatus: diagnostic.status,
       mediaSigningConfigured,
       corsAllowedOriginsCount,
     },

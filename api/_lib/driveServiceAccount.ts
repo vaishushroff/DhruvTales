@@ -7,18 +7,30 @@ import {
 } from './drivePathUtils';
 import { isValidDriveFileId } from './mediaProxySecurity';
 
+export type SecretBindingValue = string | { get: () => Promise<string> } | undefined;
+
 export interface DriveServiceAccountEnv {
-  GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON?: string;
-  GOOGLE_SERVICE_ACCOUNT_JSON?: string;
-  GOOGLE_DRIVE_CLIENT_EMAIL?: string;
-  GOOGLE_DRIVE_PRIVATE_KEY?: string;
-  FIREBASE_SERVICE_ACCOUNT_JSON?: string;
+  GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON?: SecretBindingValue;
+  GOOGLE_SERVICE_ACCOUNT_JSON?: SecretBindingValue;
+  GOOGLE_DRIVE_SERVICE_ACCOUNT?: SecretBindingValue;
+  GOOGLE_APPLICATION_CREDENTIALS_JSON?: SecretBindingValue;
+  SERVICE_ACCOUNT_JSON?: SecretBindingValue;
+  GOOGLE_DRIVE_CLIENT_EMAIL?: SecretBindingValue;
+  GOOGLE_DRIVE_PRIVATE_KEY?: SecretBindingValue;
+  FIREBASE_SERVICE_ACCOUNT_JSON?: SecretBindingValue;
   GOOGLE_DRIVE_ROOT_FOLDER_ID?: string;
 }
 
 export interface ParsedServiceAccountCreds {
   clientEmail: string;
   privateKey: string;
+}
+
+export interface DriveServiceAccountDiagnostic {
+  configured: boolean;
+  status: 'ok' | 'missing_env' | 'invalid_json';
+  sourceKey?: string;
+  message: string;
 }
 
 export interface DriveServiceEntry {
@@ -134,53 +146,228 @@ function pemToArrayBuffer(pem: string): ArrayBuffer {
   return bytes.buffer;
 }
 
-function parseServiceAccountJsonString(raw: string): ParsedServiceAccountCreds | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
+function normalizePrivateKeyPem(rawKey: string): string {
+  return rawKey
+    .replace(/\\\\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .trim();
+}
+
+function tryExtractCredsFromObject(obj: unknown): ParsedServiceAccountCreds | null {
+  if (!obj || typeof obj !== 'object') return null;
+  const record = obj as Record<string, unknown>;
+  const clientEmail = String(record.client_email ?? record.clientEmail ?? '').trim();
+  const rawKey = String(record.private_key ?? record.privateKey ?? '');
+  const privateKey = normalizePrivateKeyPem(rawKey);
+  if (!clientEmail || !privateKey) return null;
+  return { clientEmail, privateKey };
+}
+
+function tryParseJsonCandidate(text: string): ParsedServiceAccountCreds | null {
   try {
-    const jsonText = trimmed.startsWith('{') ? trimmed : decodeBase64ToString(trimmed);
-    const parsed = JSON.parse(jsonText) as Record<string, unknown>;
-    const clientEmail = String(parsed.client_email ?? parsed.clientEmail ?? '').trim();
-    const privateKey = String(parsed.private_key ?? parsed.privateKey ?? '')
-      .replace(/\\n/g, '\n')
-      .trim();
-    if (!clientEmail || !privateKey) return null;
-    return { clientEmail, privateKey };
+    const parsed: unknown = JSON.parse(text);
+    if (typeof parsed === 'string') {
+      return tryExtractCredsFromObject(JSON.parse(parsed));
+    }
+    return tryExtractCredsFromObject(parsed);
   } catch {
     return null;
   }
 }
 
-export function resolveDriveServiceAccountCreds(
-  env: DriveServiceAccountEnv
-): ParsedServiceAccountCreds | null {
-  const candidates = [
-    env.GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON,
-    env.GOOGLE_SERVICE_ACCOUNT_JSON,
-  ];
-  for (const raw of candidates) {
-    if (raw) {
-      const parsed = parseServiceAccountJsonString(raw);
-      if (parsed) return parsed;
+/**
+ * Robustly parses Google Service Account JSON from raw JSON, single-line/multi-line
+ * dashboard pastes (even when raw newlines break strict JSON.parse), outer-quoted JSON,
+ * double-escaped JSON strings, or base64-encoded JSON.
+ */
+export function parseServiceAccountJsonString(raw: string): ParsedServiceAccountCreds | null {
+  let cleaned = raw.replace(/^\uFEFF/, '').trim();
+  if (!cleaned) return null;
+
+  // Unwrap accidental outer single quotes or backticks (e.g., '{"type":...}')
+  if (
+    (cleaned.startsWith("'") && cleaned.endsWith("'")) ||
+    (cleaned.startsWith('`') && cleaned.endsWith('`'))
+  ) {
+    cleaned = cleaned.slice(1, -1).trim();
+  }
+
+  // 1. Direct JSON (or JSON-encoded string `"{\"type\":...}"`)
+  const direct = tryParseJsonCandidate(cleaned);
+  if (direct) return direct;
+
+  // 2. If literal newlines/carriage returns were pasted inside JSON string values (common in secret UIs)
+  if (cleaned.includes('{') && cleaned.includes('}')) {
+    const flattened = cleaned.replace(/\r\n/g, '\\n').replace(/\n/g, '\\n').replace(/\r/g, '\\n');
+    const fromFlattened = tryParseJsonCandidate(flattened);
+    if (fromFlattened) return fromFlattened;
+  }
+
+  // 3. Base64 or Base64URL encoded JSON
+  if (!cleaned.startsWith('{')) {
+    try {
+      const decoded = decodeBase64ToString(cleaned.replace(/\s+/g, ''));
+      const fromB64 = tryParseJsonCandidate(decoded);
+      if (fromB64) return fromB64;
+    } catch {
+      // Not valid base64; continue to fallback extraction
     }
   }
 
-  const email = env.GOOGLE_DRIVE_CLIENT_EMAIL?.trim();
-  const key = env.GOOGLE_DRIVE_PRIVATE_KEY?.replace(/\\n/g, '\n').trim();
-  if (email && key) {
-    return { clientEmail: email, privateKey: key };
-  }
-
-  if (env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-    const parsed = parseServiceAccountJsonString(env.FIREBASE_SERVICE_ACCOUNT_JSON);
-    if (parsed) return parsed;
+  // 4. Resilient field extraction if dashboard paste escaped/mangled non-key JSON punctuation
+  const emailMatch = /["']?client_email["']?\s*:\s*["']([^"'\s]+@[^"'\s]+)["']/i.exec(cleaned);
+  const pemMatch =
+    /(-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z0-9 ]*PRIVATE KEY-----)/i.exec(
+      cleaned
+    );
+  if (emailMatch?.[1] && pemMatch?.[1]) {
+    return {
+      clientEmail: emailMatch[1].trim(),
+      privateKey: normalizePrivateKeyPem(pemMatch[1]),
+    };
   }
 
   return null;
 }
 
+const JSON_ENV_KEYS = [
+  'GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON',
+  'GOOGLE_SERVICE_ACCOUNT_JSON',
+  'GOOGLE_DRIVE_SERVICE_ACCOUNT',
+  'GOOGLE_APPLICATION_CREDENTIALS_JSON',
+  'SERVICE_ACCOUNT_JSON',
+  'FIREBASE_SERVICE_ACCOUNT_JSON',
+] as const;
+
+function getEnvBinding(env: DriveServiceAccountEnv, key: string): SecretBindingValue {
+  const record = env as Record<string, SecretBindingValue>;
+  if (record[key] !== undefined) return record[key];
+  const target = key.toUpperCase();
+  for (const actualKey of Object.keys(record)) {
+    if (actualKey.trim().toUpperCase() === target && record[actualKey] !== undefined) {
+      return record[actualKey];
+    }
+  }
+  return undefined;
+}
+
+async function readSecretBindingValue(val: SecretBindingValue): Promise<string | null> {
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    return trimmed ? trimmed : null;
+  }
+  if (val && typeof val === 'object' && typeof val.get === 'function') {
+    try {
+      const resolved = await val.get();
+      return typeof resolved === 'string' && resolved.trim() ? resolved.trim() : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+export function resolveDriveServiceAccountCreds(
+  env: DriveServiceAccountEnv
+): ParsedServiceAccountCreds | null {
+  for (const key of JSON_ENV_KEYS) {
+    const raw = getEnvBinding(env, key);
+    if (typeof raw === 'string' && raw.trim()) {
+      const parsed = parseServiceAccountJsonString(raw);
+      if (parsed) return parsed;
+    }
+  }
+
+  const rawEmail = getEnvBinding(env, 'GOOGLE_DRIVE_CLIENT_EMAIL');
+  const rawKey = getEnvBinding(env, 'GOOGLE_DRIVE_PRIVATE_KEY');
+  const email = typeof rawEmail === 'string' ? rawEmail.trim() : '';
+  const key = typeof rawKey === 'string' ? normalizePrivateKeyPem(rawKey) : '';
+  if (email && key) {
+    return { clientEmail: email, privateKey: key };
+  }
+
+  return null;
+}
+
+export async function resolveDriveServiceAccountCredsAsync(
+  env: DriveServiceAccountEnv
+): Promise<{
+  creds: ParsedServiceAccountCreds | null;
+  diagnostic: DriveServiceAccountDiagnostic;
+}> {
+  let firstPresentKey: string | undefined;
+
+  for (const key of JSON_ENV_KEYS) {
+    const rawVal = getEnvBinding(env, key);
+    const resolvedStr = await readSecretBindingValue(rawVal);
+    if (resolvedStr) {
+      if (!firstPresentKey) firstPresentKey = key;
+      const parsed = parseServiceAccountJsonString(resolvedStr);
+      if (parsed) {
+        return {
+          creds: parsed,
+          diagnostic: {
+            configured: true,
+            status: 'ok',
+            sourceKey: key,
+            message: 'Google Drive Service Account is configured.',
+          },
+        };
+      }
+    }
+  }
+
+  const email = await readSecretBindingValue(getEnvBinding(env, 'GOOGLE_DRIVE_CLIENT_EMAIL'));
+  const rawPrivateKey = await readSecretBindingValue(getEnvBinding(env, 'GOOGLE_DRIVE_PRIVATE_KEY'));
+  if (email && rawPrivateKey) {
+    return {
+      creds: { clientEmail: email, privateKey: normalizePrivateKeyPem(rawPrivateKey) },
+      diagnostic: {
+        configured: true,
+        status: 'ok',
+        sourceKey: 'GOOGLE_DRIVE_CLIENT_EMAIL',
+        message: 'Google Drive Service Account is configured.',
+      },
+    };
+  }
+  if (email || rawPrivateKey) {
+    firstPresentKey = firstPresentKey ?? (email ? 'GOOGLE_DRIVE_CLIENT_EMAIL' : 'GOOGLE_DRIVE_PRIVATE_KEY');
+  }
+
+  if (firstPresentKey) {
+    return {
+      creds: null,
+      diagnostic: {
+        configured: false,
+        status: 'invalid_json',
+        sourceKey: firstPresentKey,
+        message: `Secret "${firstPresentKey}" is present on the server, but could not be read as valid Google Service Account JSON (must include client_email and private_key). Re-paste the full JSON (or base64-encoded JSON) and redeploy.`,
+      },
+    };
+  }
+
+  return {
+    creds: null,
+    diagnostic: {
+      configured: false,
+      status: 'missing_env',
+      message:
+        'Google Drive Service Account secret was not found in the runtime environment. On Cloudflare Workers, add GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON under Worker Settings -> Variables and Secrets (NOT Build -> Variables and secrets), then click Deploy.',
+    },
+  };
+}
+
 export function isDriveServiceAccountConfigured(env: DriveServiceAccountEnv): boolean {
   return resolveDriveServiceAccountCreds(env) !== null;
+}
+
+export async function isDriveServiceAccountConfiguredAsync(
+  env: DriveServiceAccountEnv
+): Promise<boolean> {
+  const { creds } = await resolveDriveServiceAccountCredsAsync(env);
+  return creds !== null;
 }
 
 function extractRootFolderId(raw: string | undefined): string | null {
@@ -196,12 +383,12 @@ function extractRootFolderId(raw: string | undefined): string | null {
 export async function getDriveServiceAccountAccessToken(
   env: DriveServiceAccountEnv
 ): Promise<{ accessToken: string; clientEmail: string }> {
-  const creds = resolveDriveServiceAccountCreds(env);
+  const { creds, diagnostic } = await resolveDriveServiceAccountCredsAsync(env);
   if (!creds) {
     throw new DriveServiceAccountError(
       'drive_sa_not_configured',
       503,
-      'Google Drive Service Account is not configured on this server. Set GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON in your environment/Worker secrets.'
+      diagnostic.message
     );
   }
 

@@ -3,9 +3,9 @@ import {
   DriveServiceAccountError,
   fetchDriveStreamWithServiceAccount,
   getDriveFileMetadataWithServiceAccount,
-  isDriveServiceAccountConfigured,
+  isDriveServiceAccountConfiguredAsync,
   resolveDriveFileByPath,
-  resolveDriveServiceAccountCreds,
+  resolveDriveServiceAccountCredsAsync,
   type DriveServiceAccountEnv,
 } from './driveServiceAccount';
 import { verifyFirebaseIdTokenEdge } from './firebaseEdgeAuth';
@@ -91,7 +91,7 @@ async function importAesGcmKey(env: UniversalEdgeEnv): Promise<CryptoKey> {
       TEXT_ENCODER.encode(`dhruv-tales:media-proxy:v1:${secretRaw}`)
     );
   } else {
-    const saCreds = resolveDriveServiceAccountCreds(env);
+    const { creds: saCreds } = await resolveDriveServiceAccountCredsAsync(env);
     if (saCreds) {
       keyMaterial = await crypto.subtle.digest(
         'SHA-256',
@@ -565,7 +565,7 @@ async function handleProxyStream(
 
   try {
     let upstream: Response;
-    if (driveFileId && isDriveServiceAccountConfigured(env)) {
+    if (driveFileId && (await isDriveServiceAccountConfiguredAsync(env))) {
       upstream = await fetchDriveStreamWithServiceAccount(driveFileId, rangeHeader, method, env);
     } else {
       upstream = await fetchUpstreamSafe(upstreamUrl, rangeHeader, method, driveFileId);
@@ -669,14 +669,15 @@ export async function handleUniversalEdgeApiRequest(
     return handleProxyStream(request, url, env, cors);
   }
   if (path === '/api/health') {
-    const driveConfigured = isDriveServiceAccountConfigured(env);
+    const { diagnostic } = await resolveDriveServiceAccountCredsAsync(env);
     return jsonResponse(
       {
         ok: true,
         service: serviceName,
         proxy: true,
-        driveConfigured,
-        driveServiceAccountConfigured: driveConfigured,
+        driveConfigured: diagnostic.configured,
+        driveServiceAccountConfigured: diagnostic.configured,
+        driveStatus: diagnostic.status,
       },
       200,
       cors
