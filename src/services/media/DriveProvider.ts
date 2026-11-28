@@ -11,6 +11,12 @@ import {
   isStaticHostApiUnavailable,
   parseBatchEpisodeLines,
 } from './driveFallback';
+import {
+  fetchDriveMediaBlobUrl,
+  getCachedDriveAccessToken,
+  listGoogleDriveFolderFiles,
+} from './googleDriveClient';
+import { extractDriveFolderId, planClientDriveFolderImport } from './googleDriveParser';
 import type {
   MediaPlaybackResolution,
   MediaProvider,
@@ -174,13 +180,30 @@ async function getOptionalFirebaseIdToken(): Promise<string | null> {
   }
 }
 
-function buildDirectDriveFallbackResolution(mediaRef: MediaRef): MediaPlaybackResolution {
+async function resolveDirectDriveFallback(mediaRef: MediaRef): Promise<MediaPlaybackResolution> {
   const rawId = mediaRef.id.trim();
   const driveFileId = extractDriveFileId(rawId);
+  const fallbackMime = mediaRef.type === 'video' ? 'video/mp4' : 'audio/mpeg';
+
   if (driveFileId) {
+    const driveToken = getCachedDriveAccessToken();
+    if (driveToken) {
+      const blobRes = await fetchDriveMediaBlobUrl(driveToken, driveFileId, fallbackMime);
+      if (blobRes) {
+        return {
+          url: blobRes.url,
+          mimeType: blobRes.mimeType,
+          provider: 'drive',
+          isSimulatedMedia: false,
+          isProductionProtected: false,
+          label: 'Google Drive (Connected account playback)',
+        };
+      }
+    }
+
     return {
       url: buildDirectDrivePlaybackUrl(driveFileId),
-      mimeType: mediaRef.type === 'video' ? 'video/mp4' : 'audio/mpeg',
+      mimeType: fallbackMime,
       provider: 'drive',
       isSimulatedMedia: false,
       isProductionProtected: false,
@@ -192,7 +215,7 @@ function buildDirectDriveFallbackResolution(mediaRef: MediaRef): MediaPlaybackRe
   if (safeUrl) {
     return {
       url: safeUrl,
-      mimeType: mediaRef.type === 'video' ? 'video/mp4' : 'audio/mpeg',
+      mimeType: fallbackMime,
       provider: 'drive',
       isSimulatedMedia: false,
       isProductionProtected: false,
@@ -265,7 +288,7 @@ export class DriveMediaProvider implements MediaProvider {
       });
     } catch {
       // Network/unreachable backend -> use direct shared Google Drive playback fallback
-      return buildDirectDriveFallbackResolution(mediaRef);
+      return resolveDirectDriveFallback(mediaRef);
     }
 
     const payload = await parseJsonSafe<{
@@ -284,13 +307,13 @@ export class DriveMediaProvider implements MediaProvider {
         response.status === 503 ||
         payload?.code === 'server_not_configured'
       ) {
-        return buildDirectDriveFallbackResolution(mediaRef);
+        return resolveDirectDriveFallback(mediaRef);
       }
       throw mapDriveApiError(response.status, payload);
     }
 
     if (!payload?.url || !payload.url.startsWith('/api/media/stream')) {
-      return buildDirectDriveFallbackResolution(mediaRef);
+      return resolveDirectDriveFallback(mediaRef);
     }
 
     return {
@@ -500,6 +523,135 @@ export async function importEpisodesFromDirectLinks(params: {
       fileName: `Line ${inv.lineNumber}: ${inv.rawLine.slice(0, 48)}`,
       reason: inv.reason,
     })),
+    mode: 'direct-firestore',
+  };
+}
+
+/**
+ * 100% client-side Google Drive folder importer using the user's in-memory
+ * Google Drive OAuth access token (`drive.readonly`) and Firestore batch writes.
+ * Works on any static or full-stack host with zero backend server required.
+ */
+export async function importEpisodesFromGoogleDriveDirect(params: {
+  story: Story;
+  existingEpisodes: Episode[];
+  actorUid: string;
+  folderInput: string;
+  accessToken: string;
+  defaultPriceCoins?: number;
+}): Promise<DriveFolderImportResult> {
+  const folderId = extractDriveFolderId(params.folderInput);
+  if (!folderId) {
+    throw new DriveMediaError(
+      'invalid_folder_id',
+      400,
+      'Select a Google Drive folder from the list or paste a valid Google Drive folder URL/ID.'
+    );
+  }
+
+  const files = await listGoogleDriveFolderFiles(params.accessToken, folderId);
+  const existingNumbers = new Set(
+    params.existingEpisodes
+      .filter((ep) => !ep.isDeleted)
+      .map((ep) => ep.episodeNumber)
+  );
+  const plan = planClientDriveFolderImport(files, existingNumbers);
+
+  const created: DriveImportCreatedItem[] = [];
+  const priceCoins = Math.max(
+    0,
+    Math.min(100_000, Math.floor(params.defaultPriceCoins ?? 0))
+  );
+  const ownerUid = params.story.creatorOwnerUid || params.actorUid;
+
+  if (plan.toCreate.length > 0) {
+    try {
+      const stamp = Date.now().toString(36);
+      const storySlug = slugify(params.story.id).slice(0, 20);
+      let anyNewVideo = false;
+      const CHUNK_SIZE = 400;
+
+      for (let start = 0; start < plan.toCreate.length; start += CHUNK_SIZE) {
+        const chunk = plan.toCreate.slice(start, start + CHUNK_SIZE);
+        const batch = writeBatch(db);
+
+        for (const ep of chunk) {
+          const epId = `ep-${storySlug}-${ep.episodeNumber}-${stamp}`.slice(0, 80);
+          const primaryAudioId = ep.audioFile?.id || ep.videoFile?.id;
+          if (!primaryAudioId) continue;
+
+          const audioRef: MediaRef = {
+            provider: 'drive',
+            id: primaryAudioId,
+            type: 'audio',
+          };
+
+          const epPayload: Record<string, unknown> = {
+            id: epId,
+            storyId: params.story.id,
+            creatorOwnerUid: ownerUid,
+            episodeNumber: ep.episodeNumber,
+            title: ep.title.slice(0, 160),
+            titleHi: ep.title.slice(0, 160),
+            description: '',
+            descriptionHi: '',
+            durationSec: ep.estimatedDurationSec,
+            priceCoins,
+            mediaRef: audioRef,
+            audioRef,
+            isEnding: false,
+            publishedAt: serverTimestamp(),
+            createdAt: serverTimestamp(),
+          };
+
+          if (ep.videoFile) {
+            epPayload.videoMediaRef = {
+              provider: 'drive',
+              id: ep.videoFile.id,
+              type: 'video',
+            };
+            anyNewVideo = true;
+          }
+
+          batch.set(doc(db, 'episodes', epId), epPayload);
+          const sourceFiles = [ep.audioFile?.name, ep.videoFile?.name].filter(
+            (name): name is string => Boolean(name)
+          );
+          created.push({
+            episodeId: epId,
+            episodeNumber: ep.episodeNumber,
+            title: ep.title,
+            hasAudio: Boolean(ep.audioFile),
+            hasVideo: Boolean(ep.videoFile),
+            files: sourceFiles,
+          });
+        }
+
+        await batch.commit();
+      }
+
+      const totalEpisodesAfter =
+        params.existingEpisodes.filter((e) => !e.isDeleted).length + created.length;
+      const storyHasAnyVideo =
+        anyNewVideo ||
+        params.existingEpisodes.some((e) => !e.isDeleted && Boolean(e.videoMediaRef));
+
+      await updateDoc(doc(db, 'stories', params.story.id), {
+        episodeCount: totalEpisodesAfter,
+        format: storyHasAnyVideo ? 'hybrid' : params.story.format,
+        updatedAt: serverTimestamp(),
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `episodes(drive-batch:${params.story.id})`);
+    }
+  }
+
+  return {
+    storyId: params.story.id,
+    totalFilesScanned: files.length,
+    created,
+    skipped: plan.skipped,
+    invalid: plan.invalid,
     mode: 'direct-firestore',
   };
 }

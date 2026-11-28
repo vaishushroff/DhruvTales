@@ -3,10 +3,10 @@
   "appId": "1:895800678063:web:3645e53dbd56df351e665a",
   "apiKey": "AIzaSyDytpMSBPppY4uPOOXQ--2tC5uDVFAI38c",
   "authDomain": "dhruv-tales.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-dhruvtales-f37a8591-ea84-4cb5-a280-729bcd4480c6",
   "storageBucket": "dhruv-tales.firebasestorage.app",
   "messagingSenderId": "895800678063",
   "measurementId": "",
   "oAuthClientId": "895800678063-gsicjk3jm6fk9btbv24gc0su1rpnfpr1.apps.googleusercontent.com",
-  "recaptchaSiteKey": ""
+  "recaptchaSiteKey": "",
+  "firestoreDatabaseId": "ai-studio-dhruvtales-f37a8591-ea84-4cb5-a280-729bcd4480c6"
 }

@@ -360,7 +360,8 @@ export async function startPortableServer(options?: {
       return;
     }
 
-    if (parsedUrl.pathname === '/api' || parsedUrl.pathname.startsWith('/api/')) {
+    const isViteDevSharedLib = Boolean(viteMiddleware) && parsedUrl.pathname.startsWith('/api/_lib/');
+    if (!isViteDevSharedLib && (parsedUrl.pathname === '/api' || parsedUrl.pathname.startsWith('/api/'))) {
       void handleApiRequest(req, res, parsedUrl);
       return;
     }

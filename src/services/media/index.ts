@@ -25,6 +25,15 @@ export {
   DriveMediaProvider,
   importEpisodesFromDirectLinks,
   importEpisodesFromDriveFolder,
+  importEpisodesFromGoogleDriveDirect,
   type DriveFolderImportResult,
 } from './DriveProvider';
+export {
+  clearCachedDriveAccessToken,
+  connectGoogleDriveAccount,
+  getCachedDriveAccessToken,
+  listGoogleDriveFolders,
+} from './googleDriveClient';
+export { extractDriveFolderId, type ClientDriveFolderItem } from './googleDriveParser';
+export { parseBatchEpisodeLines } from './driveFallback';
 export type { MediaProvider, MediaPlaybackResolution, MediaUploadMetadata } from './MediaProvider';
